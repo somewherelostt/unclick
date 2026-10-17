@@ -10,7 +10,6 @@ node_modules/
 runs/*
 !runs/demo-*.jsonl
 
-.projects/state.local.json
 .createos.json
 
 .projects/cache
@@ -22,3 +21,4 @@ runs/*
 !.env.example
 
 .vercel
+video/
