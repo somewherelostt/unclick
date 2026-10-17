@@ -1,6 +1,13 @@
 """Unclick orchestrator web app.
 
-Run:  UNCLICK_FAKE=1 uvicorn app.main:app --port 8080
+Modes (the header badge always says which one is running):
+  uvicorn app.main:app --port 8080                          real CreateOS sandboxes + real agent
+  UNCLICK_SANDBOX=local uvicorn app.main:app --port 8080    real agent, local Chrome + local processes (no CreateOS)
+  UNCLICK_FAKE=1 uvicorn app.main:app --port 8080           scripted fake pipeline (no LLM, no sandboxes)
+  UNCLICK_REPLAY=runs/<name>.jsonl ...                      every new run replays that recording
+  /?replay=<name>&speed=2                                   replay runs/<name>.jsonl from the UI
+
+Every run is recorded to runs/<run_id>.jsonl (first line: {"kind": "_meta", ...}).
 """
 
 from __future__ import annotations
@@ -47,18 +54,62 @@ def fake_mode() -> bool:
     return os.getenv("UNCLICK_FAKE") == "1"
 
 
+def sandbox_mode() -> str:
+    """'local' runs the real pipeline on this machine (unclick.fakes sandboxes + local Chrome)."""
+    return "local" if os.getenv("UNCLICK_SANDBOX", "").strip().lower() == "local" else "createos"
+
+
+RUNS_DIR = Path(os.getenv("UNCLICK_RUNS_DIR", str(ROOT / "runs")))
+_LOCAL_FACTORY = None
+
+
+def local_factory():
+    global _LOCAL_FACTORY
+    if _LOCAL_FACTORY is None:
+        from unclick.fakes import FakeFactory
+
+        _LOCAL_FACTORY = FakeFactory(prefix="sb-local")
+        import atexit
+
+        atexit.register(lambda: [sb.destroy() for sb in list(_LOCAL_FACTORY.created)])  # no orphan API servers
+    return _LOCAL_FACTORY
+
+
+def stripe_enabled() -> bool:
+    try:
+        from unclick import billing  # type: ignore
+
+        return billing.enabled()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Runs + in-process event sink
 # ---------------------------------------------------------------------------
 
 
 class Run:
-    def __init__(self, url: str, task: str, fake: bool):
+    def __init__(self, url: str, task: str, fake: bool, mode: str | None = None, record: bool = True):
         self.id = uuid.uuid4().hex[:10]
         self.url = url
         self.task = task
         self.fake = fake
+        self.mode = mode or ("fake" if fake else sandbox_mode())  # fake | local | createos | replay
+        self.replay_of: str | None = None
+        self.recorded_mode: str | None = None
         self.created = time.time()
+        self._rec = None
+        if record:
+            try:
+                RUNS_DIR.mkdir(parents=True, exist_ok=True)
+                self._rec = open(RUNS_DIR / f"{self.id}.jsonl", "a", encoding="utf-8")  # noqa: SIM115
+                self._rec.write(json.dumps({"kind": "_meta", "run_id": self.id, "url": url, "task": task,
+                                            "mode": self.mode, "created": self.created,
+                                            "stripe": stripe_enabled()}) + "\n")
+                self._rec.flush()
+            except OSError as e:
+                log.warning("cannot record run %s: %s", self.id, e)
         self.events: list[dict[str, Any]] = []
         self.done = False
         self.phase = "boot"
@@ -75,6 +126,12 @@ class Run:
         with self._lock:
             ev["seq"] = len(self.events)
             self.events.append(ev)
+            if self._rec:
+                try:
+                    self._rec.write(json.dumps(ev) + "\n")
+                    self._rec.flush()
+                except (OSError, ValueError):
+                    pass
             kind, data = ev["kind"], ev["data"]
             if kind == "status" and data.get("phase"):
                 self.phase = data["phase"]
@@ -96,6 +153,9 @@ class Run:
             "url": self.url,
             "task": self.task,
             "fake": self.fake,
+            "mode": self.mode,
+            "replay_of": self.replay_of,
+            "recorded_mode": self.recorded_mode,
             "phase": self.phase,
             "done": self.done,
             "error": self.error,
@@ -146,12 +206,73 @@ def _pick_pipeline(fake: bool):
         try:
             from unclick import pipeline  # type: ignore
 
+            if sandbox_mode() == "local":
+                return _local_pipeline, False
             return pipeline.run, False
         except Exception as e:  # noqa: BLE001
             log.warning("unclick.pipeline not importable (%s); using fake pipeline", e)
     from app import fake_pipeline
 
     return fake_pipeline.run, True
+
+
+def _local_pipeline(url: str, task: str, sink) -> Any:
+    """The real pipeline + real agent, with unclick.fakes sandboxes and a local Chrome instead of CreateOS."""
+    from unclick import pipeline  # type: ignore
+    from unclick.fakes import local_desktop_factory
+
+    os.environ.setdefault("UNCLICK_FORK", "0")  # a local "fork" would only be a directory copy: don't show one
+    sink.emit("log", "LOCAL SANDBOX MODE: no CreateOS. Sandboxes are local processes on this machine, Chrome is the "
+                     "local Chrome, and egress, fork, ingress and auto-pause are not enforced.", level="warn",
+              sandbox_mode="local")
+    return pipeline.run(url, task, sink, factory=local_factory(), desktop_factory=local_desktop_factory)
+
+
+def _replay_path(name: str) -> Path:
+    """runs/<name>.jsonl (or a path to a .jsonl file)."""
+    p = Path(name)
+    if p.suffix != ".jsonl":
+        p = Path(str(p) + ".jsonl")
+    for c in (RUNS_DIR / p.name, ROOT / p, p):
+        if c.is_file():
+            return c
+    raise HTTPException(404, f"recording {name!r} not found in {RUNS_DIR}")
+
+
+def _load_recording(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    meta: dict[str, Any] = {}
+    events: list[dict[str, Any]] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if str(ev.get("kind", "")).startswith("_"):
+                meta = meta or ev
+            else:
+                events.append(ev)
+    return meta, events
+
+
+def _replay_thread(run: Run, events: list[dict[str, Any]], speed: float) -> None:
+    """Re-emit recorded events with their original spacing (divided by speed); timestamps are re-based to now."""
+    try:
+        ts0 = float(events[0].get("ts", 0)) if events else 0.0
+        t_start = time.time()
+        for ev in events:
+            due = t_start + (float(ev.get("ts", ts0)) - ts0) / speed
+            wait = due - time.time()
+            if wait > 0:
+                time.sleep(min(wait, 30))
+            out = {k: v for k, v in ev.items() if k != "seq"}
+            out["ts"] = time.time()
+            run.append(out)
+    finally:
+        run.done = True
 
 
 def _run_thread(run: Run, fn) -> None:
@@ -177,17 +298,56 @@ def _run_thread(run: Run, fn) -> None:
 
 
 class RunIn(BaseModel):
-    url: str
-    task: str
+    url: str = ""
+    task: str = ""
+    replay: str | None = None   # name of a recording in runs/ (or set UNCLICK_REPLAY)
+    speed: float | None = None  # replay speed factor (UNCLICK_REPLAY_SPEED, default 1)
 
 
 @app.post("/api/runs")
 def start_run(body: RunIn) -> dict[str, Any]:
+    replay = body.replay or os.getenv("UNCLICK_REPLAY", "").strip() or None
+    if replay:
+        path = _replay_path(replay)
+        meta, events = _load_recording(path)
+        if not events:
+            raise HTTPException(400, f"recording {path.name} has no events")
+        speed = max(0.1, float(body.speed or os.getenv("UNCLICK_REPLAY_SPEED", "1") or 1))
+        rec_mode = meta.get("mode") or "unknown"
+        run = Run(meta.get("url") or body.url.strip(), meta.get("task") or body.task.strip(),
+                  fake=rec_mode == "fake", mode="replay", record=False)
+        run.replay_of = path.name
+        run.recorded_mode = rec_mode
+        RUNS[run.id] = run
+        threading.Thread(target=_replay_thread, args=(run, events, speed), daemon=True,
+                         name=f"replay-{run.id}").start()
+        return {"run_id": run.id, "fake": run.fake, "mode": "replay", "replay_of": path.name,
+                "recorded_mode": rec_mode, "speed": speed, "url": run.url, "task": run.task}
+    if not body.url.strip() or not body.task.strip():
+        raise HTTPException(400, "url and task are required")
     fn, is_fake = _pick_pipeline(fake_mode())
     run = Run(body.url.strip(), body.task.strip(), is_fake)
     RUNS[run.id] = run
     threading.Thread(target=_run_thread, args=(run, fn), daemon=True, name=f"run-{run.id}").start()
-    return {"run_id": run.id, "fake": is_fake}
+    return {"run_id": run.id, "fake": is_fake, "mode": run.mode}
+
+
+@app.get("/api/replays")
+def list_replays() -> list[dict[str, Any]]:
+    """Recordings in runs/ (newest first) with their meta line."""
+    out = []
+    if RUNS_DIR.is_dir():
+        for p in sorted(RUNS_DIR.glob("*.jsonl"), key=lambda p: -p.stat().st_mtime):
+            meta: dict[str, Any] = {}
+            try:
+                with open(p, encoding="utf-8") as f:
+                    first = json.loads(f.readline() or "{}")
+                    meta = first if str(first.get("kind", "")).startswith("_") else {}
+            except (OSError, ValueError):
+                pass
+            out.append({"name": p.stem, "size": p.stat().st_size, "mode": meta.get("mode"), "url": meta.get("url"),
+                        "task": meta.get("task"), "created": meta.get("created")})
+    return out
 
 
 @app.get("/api/runs")
@@ -256,6 +416,10 @@ async def try_api(body: TryIn) -> JSONResponse:
     if not api_url:
         raise HTTPException(400, "no api_url")
     sink = RunSink(run) if run else None
+    if run and run.mode == "replay" and run.recorded_mode != "fake":
+        return JSONResponse({"status": 409, "ms": 0, "json": {
+            "error": f"This is a replay of {run.replay_of}; the API it published is not running now. "
+                     "Start a new run to get a live API."}}, status_code=409)
     if run and run.fake:
         from app import fake_pipeline
 
@@ -274,10 +438,18 @@ async def try_api(body: TryIn) -> JSONResponse:
     if key:
         headers = {k: v for k, v in headers.items() if k.lower() != "x-unclick-key"}
         headers["X-Unclick-Key"] = key
+    demo_headers = _headers_from_curl(run.curl if run else None)
     t0 = time.time()
+    key_rejected = False
     try:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
             r = await client.get(api_url, headers=headers)
+            if r.status_code == 401 and key and headers != demo_headers and demo_headers:
+                # A key stored in the browser (bought for another API, or a stale test key) was rejected:
+                # fall back to this API's own demo key from the publish curl.
+                key_rejected = True
+                t0 = time.time()
+                r = await client.get(api_url, headers=demo_headers)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"status": 0, "ms": (time.time() - t0) * 1000, "error": str(e)}, status_code=502)
     ms = (time.time() - t0) * 1000
@@ -287,11 +459,15 @@ async def try_api(body: TryIn) -> JSONResponse:
         payload = r.text[:5000]
     remaining = r.headers.get("X-Unclick-Calls-Remaining")
     if sink and r.status_code == 200 and remaining is not None:
-        sink.emit("billing", "API call charged (Stripe meter event)", event="call_charged",
-                  calls_remaining=int(remaining), amount_cents=_cents_per_call())
+        if stripe_enabled():
+            sink.emit("billing", "API call charged (Stripe meter event)", event="call_charged",
+                      calls_remaining=int(remaining), amount_cents=_cents_per_call(), metered=True)
+        else:
+            sink.emit("billing", "Demo key call counted (Stripe not configured: not metered)", event="call_charged",
+                      calls_remaining=int(remaining), metered=False)
     elif sink and r.status_code == 402:
         sink.emit("billing", "Out of calls: 402 Payment Required", event="call_charged", calls_remaining=0)
-    return JSONResponse({"status": r.status_code, "ms": round(ms, 1), "json": payload})
+    return JSONResponse({"status": r.status_code, "ms": round(ms, 1), "json": payload, "key_rejected": key_rejected})
 
 
 def _cents_per_call() -> float | None:
@@ -316,6 +492,8 @@ async def wake(body: WakeIn) -> dict[str, Any]:
     if not api_url:
         raise HTTPException(400, "no api_url")
 
+    if run and run.mode == "replay" and run.recorded_mode != "fake":
+        raise HTTPException(409, f"replay of {run.replay_of}: its API is not running now")
     if (run and run.fake) or (run is None and fake_mode()):
         from app import fake_pipeline
 
@@ -326,6 +504,14 @@ async def wake(body: WakeIn) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         raise HTTPException(501, f"unclick.publish.wake_and_time unavailable: {e}") from e
 
+    if run and run.mode == "local":
+        # A local process never pauses: report a plain /health round trip, not a fake wake-up.
+        ms = await asyncio.to_thread(wake_and_time, api_url)
+        if sink:
+            sink.emit("log", f"Local API answered /health in {ms:.0f} ms (local sandbox mode: no auto-pause, "
+                             "so there is nothing to wake)", level="info")
+        return {"wake_ms": ms, "local": True}
+
     sandbox = _api_sandbox(run)
     try:
         wake_ms = await asyncio.to_thread(wake_and_time, api_url, sink, sandbox)
@@ -333,15 +519,17 @@ async def wake(body: WakeIn) -> dict[str, Any]:
         if sink:
             sink.emit("error", f"Wake test failed: {e}", where="wake")
         raise HTTPException(502, str(e)) from e
-    if sink and sandbox is not None:
+    if sink and sandbox is not None and run.mode != "local":
         sink.emit("sandbox", "API sandbox resumed on request", id=sandbox.id, role="api", action="resumed", ms=wake_ms)
         run.api_status = "running"
     return {"wake_ms": wake_ms}
 
 
 def _api_sandbox(run: Run | None):
-    if not run or not run.api_sandbox_id or run.fake:
+    if not run or not run.api_sandbox_id or run.fake or run.mode == "replay":
         return None
+    if run.mode == "local":
+        return local_factory().get(run.api_sandbox_id)
     try:
         from unclick.sandbox import default_factory  # type: ignore
 
@@ -377,8 +565,11 @@ async def api_status(run_id: str) -> dict[str, Any]:
 def config() -> dict[str, Any]:
     return {
         "fake": fake_mode(),
+        "sandbox": sandbox_mode(),
+        "replay": os.getenv("UNCLICK_REPLAY", "").strip() or None,
         "pipeline": _pipeline_available(),
         "billing": BILLING_MOUNTED,
+        "stripe": stripe_enabled(),
         "stripe_pk": os.getenv("STRIPE_PUBLISHABLE_KEY", "") if (os.getenv("STRIPE_PUBLISHABLE_KEY", "").startswith("pk_")) else "",
     }
 
