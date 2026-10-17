@@ -8,8 +8,10 @@ publish(source_sandbox, client_code, sink, name) -> PublishedApi
      /srv/unclick, start it with start_process, wait until /health answers on the public URL.
   3. set_auto_pause(60): idle API sandboxes pause and wake on the next request.
   4. Destroy the source to free the plan slot.
-  Fallback (fork refused, e.g. Free plan = 1 concurrent sandbox): resume the source, apply the
-  same egress + ingress to it, and publish there (warning event).
+  Fallback (fork refused, e.g. Free plan = 1 concurrent sandbox): wait until the source is
+  running again (resume it, retrying), apply the same egress + ingress, and publish there
+  (warning event). Every sandbox write retries once after a 409 (sandbox not running).
+  UNCLICK_FORK=0 skips the fork attempt entirely.
 
 wake_and_time(api_url, sink=None, sandbox=None) -> float
   Hit /health on a (paused) API and return the wake latency in ms.
@@ -24,6 +26,7 @@ events or logs) and validates keys against Stripe customer metadata itself.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -41,6 +44,7 @@ PORT = 8000
 STRIPE_HOST = "api.stripe.com"
 _URL_HOST = re.compile(r"https?://([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 _LOCAL = {"localhost", "127.0.0.1", "0.0.0.0"}
+_POLL = 1.5  # seconds between status polls while waiting for a sandbox to be running
 
 
 def hosts_from_code(code: str) -> list[str]:
@@ -92,8 +96,59 @@ def _remote_log(sb: Sandbox, lines: int = 40) -> str:
         return f"(could not read log: {e})"
 
 
-def _fork_or_fallback(src: Sandbox, allow: list[str], sink: EventSink) -> tuple[Sandbox, bool]:
+def _is_409(e: Exception) -> bool:
+    return getattr(e, "status_code", None) == 409 or "409" in str(e)[:200]
+
+
+def _ensure_running(sb: Sandbox, sink: EventSink, timeout: float = 150.0) -> None:
+    """Block until sb is running, resuming it if paused. Writes to a paused sandbox return 409.
+
+    After a refused fork the source can still be pausing/paused (or briefly 'forking'), and a
+    resume can itself fail transiently, so poll and retry instead of a single status check.
+    """
+    deadline = time.monotonic() + timeout
+    t0 = time.perf_counter()
+    resumed = False
+    last = ""
+    while time.monotonic() < deadline:
+        try:
+            last = sb.status()
+        except Exception as e:  # noqa: BLE001
+            last = f"unknown ({type(e).__name__})"
+        if last == "running":
+            if resumed:
+                sink.emit("sandbox", "Source sandbox resumed", id=sb.id, role="api", action="resumed", ms=_ms(t0))
+            return
+        if last in ("paused", "error"):
+            try:
+                sb.resume()
+                resumed = True
+                continue
+            except Exception as e:  # noqa: BLE001
+                sink.emit("log", f"Resume attempt failed ({type(e).__name__}: {str(e)[:120]}); retrying",
+                          level="warn")
+        time.sleep(_POLL)
+    raise RuntimeError(f"sandbox {sb.id} did not reach 'running' (last status {last!r}); cannot publish")
+
+
+def _call(sb: Sandbox, sink: EventSink, fn, *args: Any, **kwargs: Any) -> Any:
+    """Run a sandbox operation; on 409 (not running) wait until running and retry once."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:  # noqa: BLE001
+        if not _is_409(e):
+            raise
+        sink.emit("log", f"Sandbox not running ({str(e)[:100]}); resuming and retrying", level="warn")
+        _ensure_running(sb, sink)
+        return fn(*args, **kwargs)
+
+
+def _fork_or_fallback(src: Sandbox, allow: list[str], sink: EventSink,
+                      try_fork: bool = True) -> tuple[Sandbox, bool]:
     """Returns (api_sandbox, forked)."""
+    if not try_fork:
+        sink.emit("log", "Fork disabled (UNCLICK_FORK=0): publishing in the source sandbox", level="info")
+        return _fallback(src, allow, sink), False
     try:
         sink.emit("sandbox", "Pausing the verified sandbox to snapshot it", id=src.id, role="runner",
                   action="pausing")
@@ -109,24 +164,29 @@ def _fork_or_fallback(src: Sandbox, allow: list[str], sink: EventSink) -> tuple[
     except Exception as e:  # noqa: BLE001  (429 plan cap, 409, timeout...)
         sink.emit("log", f"Fork unavailable ({type(e).__name__}: {str(e)[:160]}); publishing in the "
                          f"source sandbox instead", level="warn")
-    try:
-        if src.status() in ("paused", "pausing"):
-            t0 = time.perf_counter()
-            src.resume()
-            sink.emit("sandbox", "Source sandbox resumed", id=src.id, role="api", action="resumed", ms=_ms(t0))
-    except Exception as e:  # noqa: BLE001
-        sink.emit("log", f"Resume check failed: {e}", level="warn")
-    src.set_egress(allow)
-    src.enable_ingress()
-    return src, False
+    return _fallback(src, allow, sink), False
+
+
+def _fallback(src: Sandbox, allow: list[str], sink: EventSink) -> Sandbox:
+    """Publish in the source itself: make sure it is running (resume if paused), then apply policy."""
+    _ensure_running(src, sink)
+    _call(src, sink, src.set_egress, allow)
+    _call(src, sink, src.enable_ingress)
+    return src
 
 
 def publish(source_sandbox: Sandbox, client_code: str, sink: EventSink, name: str, *,
             egress_hosts: list[str] | None = None, source_site: str = "", demo_calls: int = 100,
             auto_pause_seconds: int = 60, destroy_source: bool = True,
-            health_timeout: float = 120.0) -> PublishedApi:
-    """Publish client_code (must define run(**params)) as a paid API. See module docstring."""
+            health_timeout: float = 120.0, try_fork: bool | None = None) -> PublishedApi:
+    """Publish client_code (must define run(**params)) as a paid API. See module docstring.
+
+    try_fork=None reads env UNCLICK_FORK (default on). Set UNCLICK_FORK=0 on the Free plan to skip
+    the pause + refused fork + resume round trip (~7 s).
+    """
     src = source_sandbox
+    if try_fork is None:
+        try_fork = os.environ.get("UNCLICK_FORK", "1").strip().lower() not in ("0", "false", "no", "off")
     sink.emit("status", f"Publishing {name} as an API", phase="publish")
 
     hosts = list(egress_hosts or hosts_from_code(client_code))
@@ -137,7 +197,7 @@ def publish(source_sandbox: Sandbox, client_code: str, sink: EventSink, name: st
             hosts = []
     allow = list(dict.fromkeys([*hosts, STRIPE_HOST]))
 
-    api_sb, forked = _fork_or_fallback(src, allow, sink)
+    api_sb, forked = _fork_or_fallback(src, allow, sink, try_fork)
     sink.emit("egress", "Published API egress: only the backend and Stripe", allow=allow,
               added=[STRIPE_HOST], reason="published API: backend host(s) + Stripe metering")
 
@@ -156,14 +216,17 @@ def publish(source_sandbox: Sandbox, client_code: str, sink: EventSink, name: st
                   level="warn")
 
     server_code = (TEMPLATE_DIR / "server.py").read_text(encoding="utf-8")
-    api_sb.write_file(f"{REMOTE_DIR}/client.py", client_code)
-    api_sb.write_file(f"{REMOTE_DIR}/server.py", server_code)
-    api_sb.write_file(f"{REMOTE_DIR}/config.json", json.dumps(cfg))
-    api_sb.exec(f"chmod 600 {REMOTE_DIR}/config.json 2>/dev/null; pkill -f '[s]rv/unclick/server.py' 2>/dev/null; true",
-                timeout=20)
-    api_sb.start_process(f"cd {REMOTE_DIR} && exec python3 -u {REMOTE_DIR}/server.py >> /tmp/unclick-api.log 2>&1")
+    _ensure_running(api_sb, sink)
+    _call(api_sb, sink, api_sb.write_file, f"{REMOTE_DIR}/client.py", client_code)
+    _call(api_sb, sink, api_sb.write_file, f"{REMOTE_DIR}/server.py", server_code)
+    _call(api_sb, sink, api_sb.write_file, f"{REMOTE_DIR}/config.json", json.dumps(cfg))
+    _call(api_sb, sink, api_sb.exec,
+          f"chmod 600 {REMOTE_DIR}/config.json 2>/dev/null; pkill -f '[s]rv/unclick/server.py' 2>/dev/null; true",
+          timeout=20)
+    _call(api_sb, sink, api_sb.start_process,
+          f"cd {REMOTE_DIR} && exec python3 -u {REMOTE_DIR}/server.py >> /tmp/unclick-api.log 2>&1")
 
-    local = api_sb.exec(
+    local = _call(api_sb, sink, api_sb.exec, 
         f"for i in $(seq 1 60); do curl -s --max-time 2 http://127.0.0.1:{PORT}/health && exit 0; sleep 0.5; done; exit 1",
         timeout=45)
     if local.exit_code != 0:
@@ -183,7 +246,7 @@ def publish(source_sandbox: Sandbox, client_code: str, sink: EventSink, name: st
     if not ok:
         sink.emit("log", f"Public URL not answering yet ({detail}); it may need a moment", level="warn")
 
-    api_sb.set_auto_pause(auto_pause_seconds)
+    _call(api_sb, sink, api_sb.set_auto_pause, auto_pause_seconds)
     sink.emit("log", f"Auto-pause after {auto_pause_seconds}s idle; the next request wakes it", level="info")
 
     api_url = base + "/v1/run"
