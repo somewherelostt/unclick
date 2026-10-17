@@ -105,11 +105,21 @@ Visible page text:
 CODE_SYSTEM = """You are Unclick's code writer. You turn a website's hidden JSON endpoint into a small, reliable Python client.
 Write a single file client.py:
 - Python 3.12, standard library + `requests` only.
-- Define `def run(**params) -> list | dict` that calls the endpoint directly over HTTP (no browser), replaying only the
-  headers and query/body params that are needed (a realistic User-Agent and Accept are fine). Never include cookies or
-  auth tokens from the capture.
+- Define `def run(...)` with the site's REAL query parameters as typed keyword arguments, so the API is a general
+  search/list API for this site and not a one-off scrape. Look at the endpoint's query string / request body and the
+  page URL: expose the meaningful inputs (search text, filters, sort, page, page size) with short conventional names:
+  `q` for search text, `page`, `limit`, `sort`, plus descriptive names for filters (e.g. `category`, `batch`,
+  `industry`, `hackathon`). Map each one to the API's own parameter name inside run(). Every argument has a type hint
+  and a DEFAULT that reproduces exactly what is on screen now (e.g. `def run(q: str = "http", page: int = 1,
+  limit: int = 20) -> list:`). Use only str, int, float or bool types. 1 to 6 parameters; always include `limit`
+  (cap the returned list) and, when the API has search, `q`. Optional filters may default to "" meaning "no filter":
+  then omit that API param. Never use **kwargs.
+- Right below the imports define `PARAM_DOCS = {"q": "Search text", ...}` with one short description per run()
+  parameter (mention the allowed values for enum-like filters), and `EXAMPLE_PARAMS = {...}`: one or two parameters
+  set to a DIFFERENT realistic value (e.g. another search word or filter value) that makes the site return different
+  real data. Unclick calls run(**EXAMPLE_PARAMS) to prove the parameters work.
 - Return clean data shaped for the task: usually a list of dicts with short snake_case keys for the fields the task asks
-  for (for example name, votes, url), in the same order the site shows them. Accept optional params like `limit`.
+  for (for example name, votes, url), in the same order the site shows them.
 - Handle simple pagination only if the response clearly paginates and the task needs it; keep requests minimal (<= 3).
 - Use a timeout on every request and raise a clear error on non-2xx.
 - Map fields by meaning, not to please the verifier: `url` is the item's own URL field in the response (e.g.
@@ -136,7 +146,10 @@ Response sample (truncated):
 {response_sample}
 
 For reference only, values read off the screen that must appear in your output (do not hard-code them):
-{expected}"""
+{expected}
+
+Query parameters seen in the endpoint URL: {endpoint_params}
+Query parameters in the page URL: {page_params}"""
 
 FIX_USER = """Attempt {attempt} failed verification. Fix client.py.
 

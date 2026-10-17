@@ -4,12 +4,12 @@
   <a href="LINK_TO_YOUR_YOUTUBE_VIDEO_OR_LOOM">
     <img src="docs/screenshot.png" alt="Watch the Unclick demo" />
   </a>
-  <h1>Turn browser workflows into reusable APIs</h1>
+  <h1>Unclick any website into an API</h1>
   <p>
     <b>Half the web has no API. Unclick finds the one hiding behind the page, writes the client, and proves it matches the screen.</b>
   </p>
   <p>
-    An AI agent drives Chrome in a <b>CreateOS</b> desktop sandbox, captures the site's hidden JSON API, writes and fixes a Python client until it matches the screen, then ships it as an auto-pausing API with a typed schema, an MCP endpoint, and optional Stripe test-mode billing.
+    An AI agent drives Chrome in a <b>CreateOS</b> desktop sandbox, captures the site's hidden JSON API, writes and fixes a Python client until it matches the screen, then ships it as a paid, auto-pausing API with a typed schema and an MCP endpoint.
   </p>
   <p>
     Built for the <b>CreateOS x Stripe Projects</b> hackathon, <i>"Build Agents That Run Code"</i> (Oct 17, 2026)
@@ -47,6 +47,18 @@ On the real projects.dev leaderboard, one end-to-end run took **68 seconds**, an
 | MCP + OpenAPI + health verify | Verified in local mode (real OpenAI agent, Stripe test mode). On CreateOS they ship with the same `server.py`. |
 | Fork into a tighter-policy API sandbox | Used when the plan allows it. On Free it is refused and falls back to a single sandbox. Not verified live. |
 
+### Verified on 3 sites, each a different kind of API
+
+Unclick is not tied to one site. Every API it publishes is **parameterized**: `client.run()` takes the site's real query parameters as typed arguments (search text `q`, `page`, `limit`, `sort`, filters), whose defaults reproduce exactly what was on screen. Unclick verifies the defaults against the screen, then calls `run()` once more with different values to prove the parameters change the data. Those parameters show up in `/openapi.json` and in the MCP tool's `inputSchema`, with descriptions.
+
+| Site | Task | Hidden API found | Parameters of the published API | Verified in |
+|---|---|---|---|---|
+| [projects.dev/leaderboard](https://projects.dev/leaderboard) | Top projects with name, votes and URL, filterable by hackathon | `GET projects.dev/api/leaderboard` (same host) | `hackathon`, `limit` | Real CreateOS run (68 s) and local mode |
+| [hn.algolia.com/?q=ai](https://hn.algolia.com/?q=ai) | Search Hacker News stories: title, points, URL | `POST *.algolia.net/1/indexes/Item_dev/query` (a different host) | `q`, `page`, `limit` | Local mode |
+| [crates.io/search?q=http](https://crates.io/search?q=http) | Search Rust crates: name, downloads, description | `GET crates.io/api/v1/crates` | `q`, `page`, `limit`, `sort` | Local mode |
+
+*Local mode* (`UNCLICK_SANDBOX=local`) is the same pipeline and the same real LLM agent, with local Chrome and local processes instead of CreateOS sandboxes (no egress, fork or auto-pause enforcement). The HN and crates.io runs used local mode to save the CreateOS sandbox quota for the recorded run. Each local run published a working API: for example `?q=tokio&sort=downloads&limit=3` on the crates.io API returned `mio`, `tokio`, `rustls`.
+
 ## The "Why" (Our Story)
 
 Half the web has no API. The data is right there on the screen, so a human can read it, but a developer can't call it.
@@ -59,18 +71,19 @@ Scraping HTML breaks every time the markup changes. Yet most modern sites fetch 
 GET /v1/run?from=BLR&to=SFO&date=2026-11-02
 ```
 
-That is the shape of API Unclick is built to produce: do the search once, and get a plain HTTP call back. This is an illustration of the problem, not something we have run on a specific airline. Many airline sites use anti-bot protection, which Unclick does not bypass. The verified demo is the public projects.dev leaderboard.
+That is the shape of API Unclick is built to produce: do the search once, and get a plain HTTP call back. This is an illustration of the problem, not something we have run on a specific airline. Many airline sites use anti-bot protection, which Unclick does not bypass. The verified sites are listed above (projects.dev, HN search, crates.io).
 
 **We built Unclick because we wanted that step to disappear.** You give it a URL and a task. An agent does the task once, in a real browser, finds the hidden API, and hands you back a `curl` command that returns clean JSON in about a second, with no LLM in the request path.
 
 ## What It Does
 
-You give it a URL and a task, for example `https://projects.dev/leaderboard` and "Get the top projects with name, votes and URL". Then:
+You give it a URL and a task, for example `https://hn.algolia.com/?q=ai` and "Search Hacker News stories: title, points, url". Then:
 
 - **Does the task once, live.** An AI agent works in a real Chrome browser inside a [CreateOS](https://createos.sh) `desktop:1` sandbox. You watch it over noVNC.
 - **Finds the hidden API.** A CDP recorder captures every JSON call the page makes. The pipeline picks the endpoint whose response actually contains the data that was on screen.
 - **Writes, runs and fixes a client.** The agent writes a Python client for that endpoint, runs it in a second sandbox, reads the traceback or the diff, and fixes it until its output matches what the browser showed.
-- **Publishes it as an API.** The verified client becomes an HTTPS API on the sandbox's public URL. Optional **Stripe test-mode billing** provides prepaid calls, and the sandbox **auto-pauses** when idle and wakes on the next request.
+- **Turns it into a real API, not a snapshot.** The client exposes the site's own query parameters (`q`, `page`, `sort`, filters) as typed arguments, so one run gives you a general search/list API for that site: `GET /v1/run?q=rust&page=2`.
+- **Publishes it as a paid API.** The verified client becomes an HTTPS API on the sandbox's public URL. Each call is billed in **Stripe test mode**, and the sandbox **auto-pauses** when idle and wakes on the next request.
 
 ### The app
 
@@ -107,9 +120,10 @@ The 68 s and 1.3 s figures come from a real run on the projects.dev leaderboard 
 
 ## Use Cases
 
-Unclick fits any public page that loads its data from a JSON endpoint. Only the first example has been run end to end so far. The rest are what the same pipeline is built for.
+Unclick fits any public page that loads its data from a JSON endpoint. The first two bullets have been run end to end (see "Verified on 3 sites" above). The rest are what the same pipeline is built for.
 
-- **Public leaderboards and directories.** Our demo target is the projects.dev leaderboard. The YC company directory is a planned second target.
+- **Search any site from code.** Hacker News search (`?q=`, `page`) and crates.io search (`?q=`, `sort`, `page`) became typed search APIs in one run each.
+- **Public leaderboards and directories.** The projects.dev leaderboard became an API with a `hackathon` filter.
 - **E-commerce prices and catalogs.** Turn a product listing page into a price feed.
 - **Real-estate listings.** Pull listings from a search page as structured rows.
 - **Job boards.** Get new postings as JSON instead of copying them by hand.
@@ -206,7 +220,7 @@ Each published API runs in its own sandbox and serves these endpoints. The MCP, 
 | `GET /v1/run` | Runs the verified client and returns the JSON. Needs the `X-Unclick-Key` header and uses one credit. | Verified live |
 | `GET /health` | Liveness check. | Verified live |
 | `GET /docs` | Interactive docs for the API. | Verified live |
-| `GET /openapi.json` | A **typed OpenAPI 3.1 schema**, inferred from the verified output (for example `{name: string, votes: integer, url: uri}`). | Verified (local mode) |
+| `GET /openapi.json` | A **typed OpenAPI 3.1 schema**: the query parameters come from `client.run()`'s signature (type, default, description, example), the response schema is inferred from the verified output (for example `{name: string, votes: integer, url: uri}`). | Verified (local mode) |
 | `POST /mcp` | A per-API **MCP server** (Streamable HTTP: `initialize`, `tools/list`, `tools/call`). The tool is named after the API, for example `get_projects_dev_leaderboard`. | Verified (local mode, with the official MCP Inspector CLI) |
 | `GET /health/verify` | A **health check**: re-runs the client and validates the output against the schema (79 rows in about 330 ms in our check). | Verified (local mode) |
 
@@ -237,60 +251,62 @@ Replace `<name>` with anything you like, `<api-host>` with your API's public URL
 
 ## Getting Started
 
-Prerequisites: Python 3.12 and Git. The web frontend does not require a Node build step.
+### Prerequisites
 
-### Windows (PowerShell)
+- Python 3.12+
+- The [Stripe CLI](https://docs.stripe.com/stripe-cli) with the Projects plugin (`stripe plugin install projects`)
+- An LLM key with vision and tool calling (OpenAI, or OpenRouter through Stripe Projects)
+- A Stripe account in **test mode** (free, no activation needed)
 
-From the repository root:
+### Installation
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+1. **Clone the repo**
 
-# Start the scripted web demo without cloud credentials.
-$env:UNCLICK_FAKE = '1'
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8080
-```
+   ```bash
+   git clone https://github.com/somewherelostt/unclick.git
+   cd unclick
+   ```
 
-### macOS / Linux
+2. **Install dependencies**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Provision CreateOS with Stripe Projects**
+
+   ```bash
+   stripe projects init unclick
+   stripe projects add createos/free
+   stripe projects env --pull
+   ```
+
+4. **Set up environment variables**
+   Copy `.env.example` to `.env` and fill in your keys (never commit `.env`):
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   **Required keys:**
+   - `CREATEOS_PROJECT_API_KEY` or `CREATEOS_SANDBOX_API_KEY`: written by Stripe Projects, or from the [CreateOS dashboard](https://createos.sh/app/profile)
+   - `OPENAI_API_KEY`: the agent's LLM (or an OpenRouter key plus `LLM_BASE_URL`)
+   - `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`: Stripe **test** keys. Without them, the API runs unmetered with a local demo key.
+
+### Running the App
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-test -f .env || cp .env.example .env
-UNCLICK_FAKE=1 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8080
+uvicorn app.main:app --port 8080
 ```
 
-Open **http://localhost:8080**. The scripted demo simulates exploration, repair, publishing, and purchases; it does not create cloud resources or process payments. Stop the server with `Ctrl+C`.
+Open http://localhost:8080, keep the default URL and task, and press **Unclick it**. When it finishes, copy the `curl` command from the result panel.
 
-### Live pipeline
+**Command line (no UI):**
 
-Configure these variables in `.env` before starting a live run:
-
-| Variable | Purpose |
-| --- | --- |
-| `CREATEOS_PROJECT_API_KEY`, `CREATEOS_SANDBOX_API_KEY`, or `CREATEOS_API_KEY` | CreateOS Sandbox API access |
-| `CREATEOS_SANDBOX_BASE_URL` | Control-plane URL matching your key's region |
-| `OPENAI_API_KEY` | OpenAI key, or an OpenRouter key when using its compatible endpoint |
-| `LLM_MODEL` | Model ID with vision and tool-call support |
-| `LLM_BASE_URL` | Leave blank for OpenAI; use `https://openrouter.ai/api/v1` for OpenRouter |
-| `PUBLIC_BASE_URL` | Orchestrator URL; locally, `http://localhost:8080` |
-
-Provision CreateOS and sync credentials as described in [the Stripe Projects setup guide](docs/stripe-projects.md). For OpenRouter, supply its key as `OPENAI_API_KEY` and choose an OpenRouter model ID. Never commit credentials.
-
-On Windows, restart with live mode selected:
-
-```powershell
-$env:UNCLICK_FAKE = '0'
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8080
+```bash
+python scripts/run_agent.py                      # real run on projects.dev/leaderboard
+python scripts/run_agent.py --fake --scripted    # fully offline
 ```
-
-On macOS / Linux, use the same launch command with `UNCLICK_FAKE=0`.
-
-Keep `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY` blank while billing is disabled. The `sk_test_` and `pk_test_` values in `.env.example` are placeholders, not usable credentials. No Stripe payment authentication is needed to run the scripted demo or an unmetered published API.
-
-For a single-sandbox CreateOS plan, set `UNCLICK_FORK=0` to use the source sandbox for publishing. Forking needs capacity for both the paused source and its child. Live runs create cloud resources; destroy published sandboxes when finished.
 
 ### Run Modes
 
@@ -305,17 +321,24 @@ The header badge in the UI always says which mode is running.
 
 Every run is recorded to `runs/<run_id>.jsonl`, which is what replay plays back. On PowerShell, set variables first: `$env:UNCLICK_FAKE="1"; uvicorn app.main:app --port 8080`.
 
-### Development and checks
+### Environment Variables
 
-The existing smoke scripts cover individual live components:
+| Variable | Purpose |
+|---|---|
+| `CREATEOS_PROJECT_API_KEY` | CreateOS key from Stripe Projects (preferred) |
+| `CREATEOS_SANDBOX_API_KEY` / `CREATEOS_API_KEY` | CreateOS sandbox key from the dashboard (fallback) |
+| `CREATEOS_SANDBOX_BASE_URL` | defaults to `https://api-eu.sb.createos.sh` |
+| `OPENAI_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL` | the agent's LLM (default `gpt-4.1`, needs vision and tool calling; optional OpenRouter base URL) |
+| `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY` | Stripe **test** keys |
+| `PUBLIC_BASE_URL` | public URL of the orchestrator, used for Checkout redirects |
+| `UNCLICK_FORK=0` | skip the fork attempt (saves about 7 s on the Free plan) |
+| `UNCLICK_SANDBOX=local` | local sandbox mode |
+| `UNCLICK_FAKE=1` | scripted demo mode |
+| `UNCLICK_REPLAY`, `UNCLICK_REPLAY_SPEED` | replay a recording from `runs/` |
 
-```powershell
-.\.venv\Scripts\python.exe scripts\smoke_sandbox.py --no-fork
-.\.venv\Scripts\python.exe scripts\smoke_desktop.py https://example.com
-.\.venv\Scripts\python.exe scripts\smoke_publish.py
-```
+### Plans and limits
 
-These require CreateOS credentials and create temporary cloud sandboxes. The publishing smoke test supports an unmetered demo when Stripe is unconfigured. Avoid `--keep` if you want its API sandbox cleaned up afterward.
+The Free CreateOS plan allows 1 concurrent sandbox and 10 sandboxes per day. Fork needs a second sandbox, and a desktop wants more than 1 vCPU, so use the **Beginner** plan (5 concurrent) for the full flow.
 
 ## Tech Stack
 
@@ -378,10 +401,8 @@ unclick/
 
 Honest notes:
 
-- **Free-model reliability varies.** In the Windows/free-tier setup checks, basic OpenRouter vision and tool calls worked, but full runs also encountered upstream provider errors and invalid structured output. Those checks do not reproduce every end-to-end result listed under Verified Live. Stripe billing tests for that local setup are deferred; keep test keys blank to run without payments.
-- **JSON discovery is required.** The current flow needs a captured JSON response containing the on-screen data. Some server-rendered pages need an interaction to trigger that request, and some sites will not work with this approach.
-
-- **Public data only.** Unclick doesn't bypass CAPTCHAs, bot detection or paywalls. The demo target is a public leaderboard, and we send very few requests.
+- **Public data only.** Unclick doesn't bypass CAPTCHAs, bot detection or paywalls. The verified sites are public pages, and we send very few requests.
+- **Server-rendered sites with no JSON API aren't supported yet.** If the page never fetches its data as JSON, there is no hidden API to find. In local tests, TrustMRR and the YC company directory failed this way (on TrustMRR the only JSON call was a sponsors list, not the listings).
 - **projects.dev/leaderboard is server-rendered.** Its JSON API (`/api/leaderboard`) fires only when the "filter by hackathon" dropdown changes, so the agent has to change the filter and then restore it. The API is on the same host, so the live "host added to egress" moment appears only on sites whose API lives on another host.
 - **Fork is not verified live.** It has been exercised offline, and live on Free it is refused (quota) and falls back to a single sandbox.
 - Computer use can be flaky, and the agent can fail on sites with heavy client-side state or login walls.
@@ -418,7 +439,7 @@ The agent drives a real browser and runs code it wrote itself. A CreateOS sandbo
 Stripe Projects provisions CreateOS from the terminal. Stripe test mode turns the API into a product: Checkout sells prepaid credits, and each successful call records a Billing Meter event. No real money moves.
 
 **Can I run it locally?**
-Yes. See [Getting Started](#getting-started) for Windows and macOS/Linux commands using a virtual environment. `UNCLICK_SANDBOX=local` uses local Chrome instead of CreateOS, and `UNCLICK_FAKE=1` is a scripted demo that needs no keys. See [Run Modes](#run-modes).
+Yes. `pip install -r requirements.txt`, copy `.env.example` to `.env`, and run `uvicorn app.main:app --port 8080`. `UNCLICK_SANDBOX=local` uses local Chrome instead of CreateOS, and `UNCLICK_FAKE=1` is a scripted demo that needs no keys. See [Run Modes](#run-modes).
 
 ## The Team
 

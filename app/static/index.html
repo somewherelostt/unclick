@@ -53,12 +53,12 @@
         <label class="field field-url">
           <span class="sr-only">Website URL</span>
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
-          <input id="urlIn" type="url" inputmode="url" value="https://projects.dev/leaderboard" spellcheck="false" placeholder="https://any-website.com/page" required />
+          <input id="urlIn" type="url" inputmode="url" value="https://hn.algolia.com/?q=ai" spellcheck="false" placeholder="https://any-website.com/search?q=..." required />
         </label>
         <label class="field field-task">
           <span class="sr-only">What do you want from this page?</span>
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
-          <input id="taskIn" value="Get the top projects with name, votes and URL" spellcheck="false" placeholder="What do you want from this page?" required />
+          <input id="taskIn" value="Search Hacker News stories: title, points, url" spellcheck="false" placeholder="What do you want from this page? e.g. search results with name and price" required />
         </label>
         <button id="goBtn" type="submit" class="btn btn-primary btn-lg">
           <svg class="ico bolt" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>
@@ -68,9 +68,9 @@
       </form>
       <div class="examples" aria-label="Examples">
         <span class="faint">Try</span>
-        <button type="button" class="example" data-url="https://projects.dev/leaderboard" data-task="Get the top projects with name, votes and URL">projects.dev leaderboard</button>
-        <button type="button" class="example" data-url="https://www.ycombinator.com/companies" data-task="List companies with name, batch, one-liner and website">YC companies directory</button>
-        <button type="button" class="example" data-url="https://news.ycombinator.com/" data-task="Top stories with title, points, comments and link">Hacker News front page</button>
+        <button type="button" class="example" data-url="https://hn.algolia.com/?q=ai" data-task="Search Hacker News stories: title, points, url">Hacker News search</button>
+        <button type="button" class="example" data-url="https://crates.io/search?q=http" data-task="Search Rust crates: name, downloads, description">crates.io search</button>
+        <button type="button" class="example" data-url="https://projects.dev/leaderboard" data-task="Get the top projects with name, votes and URL, filterable by hackathon">projects.dev leaderboard</button>
       </div>
       <ol class="how">
         <li><span class="how-n">1</span><div><b>Watch the agent</b><span>It opens the page in a cloud browser and finds the data behind it.</span></div></li>

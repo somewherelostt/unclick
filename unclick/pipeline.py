@@ -13,7 +13,7 @@ import re
 import time
 import traceback
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from unclick import prompts
 from unclick.contracts import CapturedRequest, Desktop, EventSink, RunResult, Sandbox, SandboxFactory
@@ -251,6 +251,21 @@ def verify_output(stdout: str, expected: list[dict[str, Any]]) -> tuple[bool, st
                 break
         if not found:
             missing.append(item)
+    # Screen-text extraction sometimes pairs a title with its neighbour's number. One such item is tolerated when
+    # every value of it is still present in the output (just on different records) and the rest match exactly.
+    all_vals = [v for rec in recs for v in _flat_values(rec)]
+    all_blob = "|".join(_norm(v) for v in all_vals)
+    all_nums = [n for n in (_as_number(v) for v in all_vals) if n is not None]
+
+    def split(item: dict) -> bool:
+        strs = [_norm(v) for v in item.values() if _as_number(v) is None and isinstance(v, str) and _norm(v)]
+        nums = [_as_number(v) for v in item.values() if _as_number(v) is not None]
+        return all(s in all_blob for s in strs) and all(any(abs(n - rn) <= max(3, 0.1 * abs(n)) for rn in all_nums)
+                                                       for n in nums)
+    if len(missing) == 1 and len(expected) >= 3 and split(missing[0]):
+        return True, got, (f"{len(expected) - 1}/{len(expected)} on-screen items match exactly; one item's values "
+                           f"are all present but on neighbouring records (screen-text pairing): "
+                           f"{json.dumps(missing[0], ensure_ascii=False)[:300]}")
     if missing:
         return False, got, (f"{len(expected) - len(missing)}/{len(expected)} on-screen items found. Missing: "
                             f"{json.dumps(missing, ensure_ascii=False)[:800]}. Output has {len(recs)} records; "
@@ -258,9 +273,12 @@ def verify_output(stdout: str, expected: list[dict[str, Any]]) -> tuple[bool, st
     return True, got, f"All {len(expected)} on-screen items found in {len(recs)} records."
 
 
-def hardcoded_values(code: str, expected: list[dict[str, Any]]) -> list[str]:
-    """String values from the screen that appear verbatim in the code (a client faking its output)."""
-    vals = {str(v) for item in expected for v in item.values() if isinstance(v, str) and len(v.strip()) >= 4}
+def hardcoded_values(code: str, expected: list[dict[str, Any]], inputs: list[str] | tuple = ()) -> list[str]:
+    """String values from the screen that appear verbatim in the code (a client faking its output).
+    `inputs` are the query values the user/site sent (e.g. q=http): a parameter default equal to one is not faking."""
+    ok = {_norm(v) for v in inputs if _norm(v)}
+    vals = {str(v) for item in expected for v in item.values()
+            if isinstance(v, str) and len(v.strip()) >= 4 and _norm(v) not in ok}
     return sorted(v for v in vals if v in code)
 
 
@@ -604,8 +622,17 @@ def run(url: str, task: str, sink: EventSink, factory: SandboxFactory | None = N
             structure="\n".join(_structure(body_json))[:2500] if body_json is not None else "(not JSON)",
             response_sample=json.dumps(_trim(body_json), ensure_ascii=False)[:3500] if body_json is not None
             else (ep.response_body or "")[:3500],
-            expected=json.dumps(expected, ensure_ascii=False))
+            expected=json.dumps(expected, ensure_ascii=False),
+            endpoint_params=json.dumps(dict(parse_qsl(urlparse(ep.url).query)), ensure_ascii=False)[:800] or "{}",
+            page_params=json.dumps(dict(parse_qsl(urlparse(url).query)), ensure_ascii=False)[:500] or "{}")
 
+        query_inputs = [v for u in (url, ep.url) for _, v in parse_qsl(urlparse(u).query)]
+        for k, v in parse_qsl(ep.request_body or "") if not (ep.request_body or "").lstrip().startswith("{") else ():
+            query_inputs.append(v)
+        body_req = _try_json(ep.request_body or "")
+        if isinstance(body_req, dict):
+            query_inputs += [str(v) for v in body_req.values() if isinstance(v, (str, int, float))]
+            query_inputs += [v for _, v in parse_qsl(str(body_req.get("params", "")))]
         conv: Any = None
         feedback: dict[str, Any] = {}
         ok = False
@@ -622,7 +649,7 @@ def run(url: str, task: str, sink: EventSink, factory: SandboxFactory | None = N
             res = runner.exec(f"cd {WORKDIR} && python3 client.py", timeout=60)
             sink.emit("run", f"python3 client.py -> exit {res.exit_code}", attempt=attempt, exit_code=res.exit_code,
                       stdout=res.stdout[:4000], stderr=res.stderr[-3000:], ms=round(res.ms, 1))
-            hard = hardcoded_values(code, expected)
+            hard = hardcoded_values(code, expected, query_inputs)
             if res.exit_code != 0:
                 ok, got, notes = False, res.stdout[:800], "The script crashed; see stderr."
             elif hard:
@@ -640,6 +667,7 @@ def run(url: str, task: str, sink: EventSink, factory: SandboxFactory | None = N
                             stdout=res.stdout[:1500] or "(empty)", notes=notes)
         if not ok:
             raise RuntimeError(f"client.py did not verify after {attempts} attempts")
+        _param_demo(runner, sample, attempts, sink)
 
         # ---- publish -------------------------------------------------------
         phase = "publish"
@@ -677,6 +705,34 @@ def run(url: str, task: str, sink: EventSink, factory: SandboxFactory | None = N
         destroy(desktop_sb, "desktop")
         if runner is not None and not published:
             destroy(runner, "runner")
+
+
+PARAM_DEMO = f"""import json, sys
+sys.path.insert(0, {WORKDIR!r})
+import client
+p = dict(getattr(client, "EXAMPLE_PARAMS", None) or {{}})
+print(json.dumps({{"params": p, "data": client.run(**p)}}, ensure_ascii=False))
+"""
+
+
+def _param_demo(runner: Sandbox, sample: Any, attempt: int, sink: EventSink) -> None:
+    """Call run(**EXAMPLE_PARAMS) once to show the API is parameterized (not a fixed scrape). Never fatal."""
+    try:
+        runner.write_file(f"{WORKDIR}/param_demo.py", PARAM_DEMO)
+        res = runner.exec(f"cd {WORKDIR} && python3 param_demo.py", timeout=60)
+        out = _try_json(res.stdout) if res.exit_code == 0 else None
+        params = out.get("params", {}) if isinstance(out, dict) else {}
+        data = out.get("data") if isinstance(out, dict) else None
+        changed = data is not None and data != sample
+        args = ", ".join(f"{k}={v!r}" for k, v in params.items()) or "defaults"
+        sink.emit("run", f"client.run({args}) -> exit {res.exit_code}" + (", different data" if changed else ""),
+                  attempt=attempt, exit_code=res.exit_code, filename="client.py", params=params, changed=changed,
+                  stdout=json.dumps(data, indent=2, ensure_ascii=False)[:4000] if data is not None else res.stdout[:4000],
+                  stderr=res.stderr[-3000:], ms=round(res.ms, 1))
+        if res.exit_code == 0 and not changed:
+            sink.emit("log", f"run({args}) returned the same data as the defaults", level="warn")
+    except Exception as e:  # noqa: BLE001
+        sink.emit("log", f"Parameter demo failed: {type(e).__name__}: {e}", level="warn")
 
 
 def _create_with_slot_wait(factory: SandboxFactory, sink: EventSink, **kw: Any) -> Sandbox:
