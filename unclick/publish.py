@@ -35,7 +35,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from unclick import billing
+from unclick import billing, schema
 from unclick.contracts import EventSink, PublishedApi, Sandbox
 
 TEMPLATE_DIR = Path(__file__).parent / "api_template"
@@ -55,6 +55,12 @@ def hosts_from_code(code: str) -> list[str]:
         if h not in _LOCAL and h not in seen:
             seen.append(h)
     return seen
+
+
+def tool_name(name: str) -> str:
+    """MCP tool name the API server derives from its config name (keep in sync with server.tool_name)."""
+    slug = re.sub(r"_+", "_", "".join(c if c.isalnum() else "_" for c in name.lower())).strip("_")
+    return ("get_" + (slug or "data"))[:64]
 
 
 def _ms(t0: float) -> float:
@@ -178,7 +184,8 @@ def _fallback(src: Sandbox, allow: list[str], sink: EventSink) -> Sandbox:
 def publish(source_sandbox: Sandbox, client_code: str, sink: EventSink, name: str, *,
             egress_hosts: list[str] | None = None, source_site: str = "", demo_calls: int = 100,
             auto_pause_seconds: int = 60, destroy_source: bool = True,
-            health_timeout: float = 120.0, try_fork: bool | None = None) -> PublishedApi:
+            health_timeout: float = 120.0, try_fork: bool | None = None, task: str = "",
+            sample_output: Any = None) -> PublishedApi:
     """Publish client_code (must define run(**params)) as a paid API. See module docstring.
 
     try_fork=None reads env UNCLICK_FORK (default on). Set UNCLICK_FORK=0 on the Free plan to skip
@@ -207,7 +214,7 @@ def publish(source_sandbox: Sandbox, client_code: str, sink: EventSink, name: st
         sink.emit("log", f"Stripe demo key failed ({type(e).__name__}); using a local demo key", level="warn")
         demo_key = f"uk_demo_{__import__('secrets').token_hex(16)}"
     cfg: dict[str, Any] = {
-        "name": name, "source_site": source_site, "api_id": api_sb.id, "port": PORT,
+        "name": name, "source_site": source_site, "task": task, "api_id": api_sb.id, "port": PORT,
         "demo_key": demo_key, "demo_calls": demo_calls, "buy_url": billing.buy_url(api_sb.id),
         **billing.sandbox_config(),
     }
@@ -220,6 +227,12 @@ def publish(source_sandbox: Sandbox, client_code: str, sink: EventSink, name: st
     _call(api_sb, sink, api_sb.write_file, f"{REMOTE_DIR}/client.py", client_code)
     _call(api_sb, sink, api_sb.write_file, f"{REMOTE_DIR}/server.py", server_code)
     _call(api_sb, sink, api_sb.write_file, f"{REMOTE_DIR}/config.json", json.dumps(cfg))
+    data_schema = schema.infer_schema(sample_output) if sample_output is not None else {}
+    _call(api_sb, sink, api_sb.write_file, f"{REMOTE_DIR}/schema.json", json.dumps(data_schema, indent=1))
+    if data_schema:
+        fields = schema.describe(data_schema)
+        sink.emit("log", "Typed schema inferred from the verified output: "
+                  + ", ".join(f"{f['name']}: {f['type']}" for f in fields)[:400], level="info")
     _call(api_sb, sink, api_sb.exec,
           f"chmod 600 {REMOTE_DIR}/config.json 2>/dev/null; pkill -f '[s]rv/unclick/server.py' 2>/dev/null; true",
           timeout=20)
@@ -250,14 +263,22 @@ def publish(source_sandbox: Sandbox, client_code: str, sink: EventSink, name: st
     sink.emit("log", f"Auto-pause after {auto_pause_seconds}s idle; the next request wakes it", level="info")
 
     api_url = base + "/v1/run"
+    mcp_url = base + "/mcp"
+    mcp_config = json.dumps({"mcpServers": {name: {"url": mcp_url, "headers": {"X-Unclick-Key": demo_key}}}},
+                            indent=2)
     api = PublishedApi(
         api_url=api_url,
         docs_url=base + "/docs",
         curl=f'curl -H "X-Unclick-Key: {demo_key}" "{api_url}"',
         sandbox_id=api_sb.id,
+        openapi_url=base + "/openapi.json",
+        mcp_url=mcp_url,
+        mcp_config=mcp_config,
     )
     sink.emit("publish", f"Live at {api_url}", api_url=api.api_url, docs_url=api.docs_url, curl=api.curl,
-              sandbox_id=api.sandbox_id)
+              sandbox_id=api.sandbox_id, api_id=api.sandbox_id, openapi_url=api.openapi_url, mcp_url=api.mcp_url,
+              mcp_config=api.mcp_config, tool_name=tool_name(name), name=name, source_url=source_site, task=task,
+              schema=data_schema, fields=schema.describe(data_schema) if data_schema else [])
 
     if forked and destroy_source:
         try:

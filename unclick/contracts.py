@@ -25,7 +25,9 @@ EventKind = Literal[
     "code",            # {attempt: int, filename: str, code: str}
     "run",             # {attempt: int, exit_code: int, stdout: str, stderr: str, ms: float}
     "verify",          # {attempt: int, ok: bool, expected: str, got: str, notes: str}
-    "publish",         # {api_url, docs_url, curl, sandbox_id}
+    "publish",         # {api_url, docs_url, curl, sandbox_id, api_id, openapi_url, mcp_url, mcp_config, tool_name,
+                       #  schema, fields: [{name, type, required}]}
+    "health",          # {api_id, ok, checked_at, problems: list[str], healthy, last_verified}
     "billing",         # {event: "checkout_created"|"paid"|"call_charged", checkout_url?, api_key?, calls_remaining?, amount_cents?}
     "pause",           # {state: "paused"|"waking"|"awake", wake_ms?: float}
     "log",             # {level: "info"|"warn"}  free-form detail
@@ -168,6 +170,9 @@ class PublishedApi:
     docs_url: str         # FastAPI /docs on the same host
     curl: str             # copy-paste example including the API key header
     sandbox_id: str
+    openapi_url: str = ""  # OpenAPI 3.1 spec with the inferred response schema
+    mcp_url: str = ""      # MCP Streamable-HTTP endpoint (one tool), same key + price as api_url
+    mcp_config: str = ""   # ready-to-paste {"mcpServers": {...}} JSON for Claude Desktop / Cursor
 
 
 @dataclass
