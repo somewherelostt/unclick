@@ -391,6 +391,29 @@ class _Throttle:
         return False
 
 
+def _retire_previous_sandboxes(sink: EventSink, wait_s: int = 120) -> None:
+    """Free plan = 1 concurrent sandbox: retire the previously published API so a new run can start."""
+    import httpx
+
+    key = (os.getenv("CREATEOS_PROJECT_API_KEY") or os.getenv("CREATEOS_SANDBOX_API_KEY")
+           or os.getenv("CREATEOS_API_KEY"))
+    base = os.getenv("CREATEOS_SANDBOX_BASE_URL") or "https://api-eu.sb.createos.sh"
+    h = {"X-Api-Key": key}
+    sink.emit("log", "CreateOS plan allows 1 sandbox at a time: retiring the previous API sandbox", level="warn")
+    data = httpx.get(f"{base}/v1/sandboxes", headers=h, timeout=30).json().get("data")
+    items = data.get("data", []) if isinstance(data, dict) else (data or [])
+    for s in items:
+        if s.get("status") not in ("destroyed", "destroying"):
+            httpx.delete(f"{base}/v1/sandboxes/{s['id']}", headers=h, timeout=30)
+            sink.emit("sandbox", "Retired previous sandbox", id=s["id"], role="api", action="destroyed")
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        st = httpx.get(f"{base}/v1/whoami", headers=h, timeout=30).json()["data"]["stats"]
+        if st.get("running", 0) + st.get("paused", 0) + st.get("other", 0) == 0:
+            return
+        time.sleep(4)
+
+
 # ---------------------------------------------------------------------------
 # pipeline
 # ---------------------------------------------------------------------------
@@ -433,7 +456,14 @@ def run(url: str, task: str, sink: EventSink, factory: SandboxFactory | None = N
         if desktop_factory is None:
             # unclick/desktop.py boots desktop:1, starts Chrome + recorder, emits sandbox + live_view.
             from unclick.desktop import create_desktop
-            desktop = create_desktop(factory, egress, sink)
+            from unclick.sandbox import PlanLimitError
+            try:
+                desktop = create_desktop(factory, egress, sink)
+            except PlanLimitError as e:
+                if "concurrent" not in str(e):
+                    raise
+                _retire_previous_sandboxes(sink)
+                desktop = create_desktop(factory, egress, sink)
             desktop_sb = desktop.sandbox
         else:
             t0 = time.perf_counter()
