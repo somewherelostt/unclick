@@ -4,9 +4,45 @@
     {
       "name": "unclick-web",
       "runtimeExecutable": "C:/Users/abuma/miniconda3/python.exe",
-      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--port", "8080"],
-      "env": { "UNCLICK_FAKE": "1", "UNCLICK_FAKE_SPEED": "1" },
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--port",
+        "8080"
+      ],
+      "env": {
+        "UNCLICK_FAKE": "1",
+        "UNCLICK_FAKE_SPEED": "1"
+      },
       "port": 8080
+    },
+    {
+      "name": "unclick-local",
+      "runtimeExecutable": "C:/Users/abuma/miniconda3/python.exe",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--port",
+        "8081"
+      ],
+      "env": {
+        "UNCLICK_SANDBOX": "local"
+      },
+      "port": 8081
+    },
+    {
+      "name": "unclick-live",
+      "runtimeExecutable": "C:/Users/abuma/miniconda3/python.exe",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--port",
+        "8082"
+      ],
+      "port": 8082
     }
   ]
 }

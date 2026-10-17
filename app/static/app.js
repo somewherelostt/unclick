@@ -3,30 +3,59 @@
   'use strict';
 
   const PHASES = [
-    ['boot', 'Boot'], ['explore', 'Explore'], ['discover', 'Discover'], ['code', 'Code'],
-    ['verify', 'Verify'], ['publish', 'Publish'], ['live', 'Live'],
+    ['boot', 'Start', 'Starting a cloud browser'],
+    ['explore', 'Watch', 'Watching the page'],
+    ['discover', 'Find', 'Finding the data source'],
+    ['code', 'Code', 'Writing the code'],
+    ['verify', 'Check', 'Checking it matches the screen'],
+    ['publish', 'Publish', 'Publishing your API'],
+    ['live', 'Live', 'Your API is live'],
   ];
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmtMs = (ms) => (ms == null ? '' : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
   const fmtSize = (b) => (b == null ? '' : b >= 1024 ? `${(b / 1024).toFixed(1)} KB` : `${b} B`);
   const clock = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour12: false });
+  const show = (el, on) => { if (typeof el === 'string') el = $(el); if (el) el.hidden = !on; };
+
+  const svg = (d, cls = 'ico', extra = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
+  const I = {
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    ban: '<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>',
+    desktop: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+    term: '<path d="m5 7 5 5-5 5M12 19h7"/>',
+    play: '<path d="M7 4v16l13-8z" fill="currentColor" stroke="none"/>',
+    moon: '<path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z"/>',
+    bolt: '<path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor" stroke="none"/>',
+    copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+    ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+    spin: '<path d="M21 12a9 9 0 1 1-6.2-8.6"/>',
+    net: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+    code: '<path d="m8 6-6 6 6 6M16 6l6 6-6 6"/>',
+    target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',
+  };
 
   let S; // run state
   let es = null;
   let timerInt = null;
   let follow = true;
-  let deskView = localStorage.getItem('unclick.deskView') || 'live';
+  let deskView = 'live';
+  try { deskView = localStorage.getItem('unclick.deskView') || 'live'; } catch { /* ignore */ }
   let config = { fake: false };
+  let billingCfg = null;
 
   function fresh() {
     return {
-      runId: null, lastSeq: -1, t0: null, tEnd: null, phase: null, failed: false, done: false,
+      runId: null, lastSeq: -1, t0: null, tEnd: null, phase: null, statusMsg: '', failed: false, done: false,
       sandboxes: new Map(), forks: [], pause: null,
       egress: null, captures: [], endpoint: null,
       codes: [], runs: [], verifies: [], selAttempt: null,
       publish: null, billing: { calls: null, last: null, feed: [], apiKey: null },
-      liveUrl: null, shot: null, log: [], fake: undefined,
+      liveUrl: null, shot: null, fake: undefined, deskId: null,
     };
   }
 
@@ -39,29 +68,47 @@
     const url = $('urlIn').value.trim();
     const task = $('taskIn').value.trim();
     if (!url || !task) return toast('Enter a URL and a task');
-    $('goBtn').disabled = true;
+    setBusy(true);
     try {
       const r = await fetch('/api/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, task }) });
       if (!r.ok) throw new Error(await r.text());
-      const { run_id, fake } = await r.json();
-      attach(run_id, fake);
+      const j = await r.json();
+      attach(j.run_id, j.fake, j);
+      revealStage();
     } catch (err) {
       toast('Could not start run: ' + err.message);
-      $('goBtn').disabled = false;
+      setBusy(false);
     }
   }
 
-  function attach(runId, fake) {
+  // In the stacked (narrow) layout the stage is below the fold: bring it into view.
+  function revealStage() {
+    if (window.matchMedia('(max-width: 1099px), (max-height: 680px)').matches) {
+      $('stepper').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  function setBusy(on) {
+    const b = $('goBtn');
+    b.disabled = on;
+    b.title = on ? 'A run is in progress' : '';
+    b.classList.toggle('busy', on);
+    $('goLabel').textContent = on ? 'Unclicking…' : 'Unclick it';
+  }
+
+  function attach(runId, fake, info) {
     if (es) es.close();
     S = fresh();
     S.runId = runId;
     S.fake = fake;
-    if (fake === undefined) fetch(`/api/runs/${runId}`).then((r) => r.json()).then((j) => { S.fake = j.fake; }).catch(() => {});
-    history.replaceState(null, '', location.pathname + '#run=' + runId);
+    if (info && info.mode) setRunMode(info);
+    else fetch(`/api/runs/${runId}`).then((r) => r.json()).then((j) => { S.fake = j.fake; setRunMode(j); }).catch(() => {});
+    history.replaceState(null, '', location.pathname + location.search + '#run=' + runId);
+    setState('running');
     try { localStorage.setItem('unclick.lastRun', runId); } catch { /* ignore */ }
     resetUI();
     $('runId').textContent = runId;
-    $('goBtn').disabled = true;
+    setBusy(true);
     es = new EventSource(`/api/runs/${runId}/events`);
     es.onmessage = (m) => {
       const ev = JSON.parse(m.data);
@@ -75,12 +122,72 @@
       if (!r || r.status === 404) {
         if (es) es.close();
         es = null;
-        $('goBtn').disabled = false;
+        setBusy(false);
         if (r) { history.replaceState(null, '', location.pathname); toast('That run is gone (server restarted)'); }
       }
     };
     clearInterval(timerInt);
     timerInt = setInterval(tick, 250);
+  }
+
+  // Never let a local, scripted or replayed run pass as a live CreateOS run: the mode badge says what is running.
+  function setRunMode(info) {
+    if (!S) return;
+    S.mode = info.mode;
+    S.replayOf = info.replay_of;
+    S.recordedMode = info.recorded_mode;
+    if (info.url && info.mode === 'replay') { $('urlIn').value = info.url; $('taskIn').value = info.task || $('taskIn').value; }
+    renderModeBadge();
+    renderRoles();
+    renderBillingMode();
+  }
+
+  const MODE = {
+    createos: ['LIVE', 'live', 'Real CreateOS sandboxes, real agent'],
+    local: ['LOCAL SANDBOX', 'local', 'Local sandbox mode: real agent + local Chrome + local processes. No CreateOS sandboxes; egress, fork and auto-pause are not enforced.'],
+    fake: ['SCRIPTED', 'scripted', 'Scripted demo pipeline: no LLM, no sandboxes'],
+  };
+  function renderModeBadge() {
+    const b = $('modeBadge');
+    const mode = (S && S.mode) || (config.fake ? 'fake' : config.sandbox) || 'createos';
+    let [text, cls, tip] = MODE[mode] || [String(mode).toUpperCase(), 'scripted', ''];
+    let sub = '';
+    if (mode === 'replay') {
+      const rec = S && S.recordedMode;
+      [text, cls] = ['REPLAY', 'replay'];
+      sub = rec ? ({ createos: 'of a live run', local: 'of a local run', fake: 'of a scripted run' }[rec] || `of ${rec}`) : '';
+      tip = `Replaying the recording ${S && S.replayOf ? S.replayOf : ''} (not a live run)`;
+    } else if (mode === 'createos' && config.pipeline === false && !config.fake) {
+      [text, cls, sub, tip] = ['SCRIPTED', 'scripted', 'no pipeline', 'unclick.pipeline is not importable: the scripted fake pipeline runs instead'];
+    }
+    b.className = 'mode-badge ' + cls;
+    b.title = tip;
+    b.innerHTML = `<span class="dot"></span>${esc(text)}${sub ? `<span class="sub">${esc(sub)}</span>` : ''}`;
+    b.hidden = false;
+  }
+
+  function stripeOn() { return !!(config.stripe || (billingCfg && billingCfg.enabled)); }
+  function stripeOff() { return !stripeOn() && !config.fake && !(S && S.fake); }
+  function renderBillingMode() {
+    const off = stripeOff();
+    const btn = $('buyBtn');
+    btn.disabled = off;
+    btn.title = off ? 'Stripe test mode is not configured (no STRIPE_SECRET_KEY). The published API runs on its demo key.' : 'Opens Stripe Checkout (test mode)';
+    const chip = $('stripeModeChip');
+    chip.className = 'chip ' + (off ? 'warn' : 'stripe');
+    chip.innerHTML = off ? 'Demo key' : '<span class="dot"></span>Test mode';
+    chip.title = off ? 'Stripe test mode is not configured: the API accepts its demo key, unmetered' : 'Stripe test mode';
+    const calls = (billingCfg && billingCfg.calls) || 100;
+    const cents = billingCfg && billingCfg.amount_cents != null ? billingCfg.amount_cents : 100;
+    $('buyLabel').textContent = `Buy ${calls} calls`;
+    if ($('priceChip')) $('priceChip').textContent = priceText();
+    renderChargeNote();
+    $('priceBox').innerHTML = off ? '<b>Demo key</b>unmetered' : `<b>$${(cents / 100).toFixed(2)}</b>per ${calls} calls`;
+    if (S && !S.billing.last) {
+      const lc = $('lastCharge');
+      lc.className = 'charge';
+      lc.textContent = off ? 'Stripe not configured: demo key active' : 'No charges yet';
+    }
   }
 
   function tick() {
@@ -96,7 +203,7 @@
 
   function handle(ev) {
     const d = ev.data || {};
-    if (S.t0 == null) { S.t0 = ev.ts; $('runDot').className = 'w-2 h-2 rounded-full bg-brand-400 blink'; }
+    if (S.t0 == null) { S.t0 = ev.ts; $('runDot').className = 'run-dot running'; }
     if (ev.kind !== 'screenshot') addLog(ev);
     switch (ev.kind) {
       case 'status': onStatus(d, ev); break;
@@ -110,10 +217,11 @@
       case 'code': onCode(d, ev); break;
       case 'run': onRun(d, ev); break;
       case 'verify': onVerify(d, ev); break;
-      case 'publish': onPublish(d, ev); break;
+      case 'publish': S.publishTs = ev.ts; onPublish(d, ev); break;
+      case 'health': onHealth(d, ev); break;
       case 'billing': onBilling(d, ev); break;
       case 'pause': onPause(d, ev); break;
-      case 'error': toast('⚠ ' + ev.message, 5000); break;
+      case 'error': toast(ev.message, 5000, 'bad'); break;
       case 'done': onDone(d, ev); break;
       default: break;
     }
@@ -123,41 +231,61 @@
   // Stepper + focus
   // ---------------------------------------------------------------------------
 
-  function onStatus(d) {
-    if (d.phase === 'failed') { S.failed = true; renderStepper(); return; }
+  function onStatus(d, ev) {
+    if (ev.message) $('activityPhase').textContent = ev.message;
+    if (d.phase === 'failed') { S.failed = true; S.statusMsg = ev.message; renderStepper(); return; }
     if (!PHASES.some(([k]) => k === d.phase)) return;
     S.phase = d.phase;
+    S.statusMsg = ev.message;
     renderStepper();
     setFocus();
   }
 
   function setFocus() {
     const p = S && S.phase;
-    const cls = ['code', 'verify'].includes(p) ? 'focus-code' : ['publish', 'live'].includes(p) ? 'focus-live' : 'focus-explore';
+    const cls = ['code', 'verify'].includes(p) ? 'focus-code' : ['publish', 'live'].includes(p) && S.publish ? 'focus-live' : 'focus-explore';
     document.body.classList.remove('focus-code', 'focus-live', 'focus-explore');
     document.body.classList.add(cls);
   }
 
-  function renderStepper() {
-    const cur = S && S.phase ? PHASES.findIndex(([k]) => k === S.phase) : -1;
-    const attempts = S ? S.codes.length : 0;
+  // Built once, then updated in place so the connector lines can fill smoothly (CSS transitions).
+  function buildStepper() {
     const parts = [];
-    PHASES.forEach(([k, label], i) => {
-      let cls = 'step';
-      const allDone = S && S.done && !S.failed;
-      if (allDone || i < cur) cls += ' done';
-      else if (i === cur) cls += S.failed ? ' failed' : ' active';
-      const icon = cls.includes('done') ? '✓' : cls.includes('failed') ? '✕' : String(i + 1);
-      let extra = '';
-      if (k === 'code' && attempts > 1) extra = `<span class="chip bg-amber-500/15 text-amber-300 border-amber-500/30">attempt ${attempts}</span>`;
-      if (k === 'live' && S && S.publish) extra = `<span class="live-dot"></span>`;
-      parts.push(`<div class="${cls}"><span class="dot">${icon}</span><span>${label}</span>${extra}</div>`);
-      if (i < PHASES.length - 1) {
-        const lc = allDone || i < cur ? 'done' : i === cur && !S.failed ? 'active' : '';
-        parts.push(`<div class="step-line ${lc}"></div>`);
-      }
+    PHASES.forEach(([k, label, cap], i) => {
+      parts.push(`<div class="step" data-step="${k}"><span class="num"><span>${i + 1}</span>${svg(I.check, 'ico-sm ok-i', 'stroke-width="3"')}${svg(I.x, 'ico-sm x-i', 'stroke-width="3"')}</span>
+        <span class="txt"><span class="lbl">${label}<span class="attempt-tag" hidden></span></span><span class="cap">${esc(cap)}</span></span></div>`);
+      if (i < PHASES.length - 1) parts.push('<div class="step-line"></div>');
     });
     $('stepper').innerHTML = parts.join('');
+  }
+
+  function renderStepper() {
+    if (!$('stepper').children.length) buildStepper();
+    const cur = S && S.phase ? PHASES.findIndex(([k]) => k === S.phase) : -1;
+    const attempts = S ? S.codes.length : 0;
+    const allDone = S && S.done && !S.failed;
+    const steps = $('stepper').querySelectorAll('.step');
+    const lines = $('stepper').querySelectorAll('.step-line');
+    PHASES.forEach(([k, , cap], i) => {
+      const el = steps[i];
+      el.classList.toggle('done', !!(allDone || i < cur));
+      el.classList.toggle('active', !allDone && i === cur && !S.failed);
+      el.classList.toggle('failed', !allDone && i === cur && !!S.failed);
+      const caption = cap;
+      const c = el.querySelector('.cap');
+      if (c.textContent !== caption) { c.textContent = caption; c.title = caption; }
+      const tag = el.querySelector('.attempt-tag');
+      tag.hidden = !(k === 'code' && attempts > 1);
+      tag.textContent = `×${attempts}`;
+      if (i === Math.max(cur, 0)) {
+        const n = allDone ? PHASES.length : cur + 1;
+        $('stepPill').innerHTML = cur < 0 ? 'Starting…' : `<span class="n">Step ${n}/${PHASES.length}</span> · ${esc(allDone ? 'Your API is live' : cap)}`;
+      }
+      if (lines[i]) {
+        lines[i].classList.toggle('done', !!(allDone || i < cur));
+        lines[i].classList.toggle('active', !allDone && i === cur && !S.failed);
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -182,9 +310,7 @@
     $('liveFrame').src = S.liveUrl;
     const pop = $('popOut');
     pop.href = S.liveUrl;
-    pop.classList.remove('hidden');
-    $('liveDot').classList.remove('hidden');
-    $('deskLabel').textContent = 'LIVE DESKTOP';
+    show(pop, true);
     renderDesk();
   }
 
@@ -198,27 +324,44 @@
   function renderDesk() {
     const haveLive = !!(S && S.liveUrl);
     const haveShot = !!(S && S.shot);
-    const view = deskView === 'live' && haveLive ? 'live' : haveShot ? 'shot' : haveLive ? 'live' : null;
-    $('liveFrame').classList.toggle('hidden', view !== 'live');
-    $('shotImg').classList.toggle('hidden', view !== 'shot');
-    $('deskEmpty').classList.toggle('hidden', !!view);
-    document.querySelectorAll('.dv').forEach((b) => {
-      const on = b.dataset.view === (view || deskView);
-      b.className = 'dv px-2 py-0.5 rounded-md ' + (on ? 'text-white bg-white/15' : 'text-slate-400');
-    });
+    const deskGone = S && S.deskId && (S.sandboxes.get(S.deskId) || {}).action === 'destroyed';
+    let view = deskView === 'live' && haveLive ? 'live' : haveShot ? 'shot' : haveLive ? 'live' : null;
+    if (deskGone && haveShot) view = 'shot';
+    show('liveFrame', view === 'live');
+    show('shotImg', view === 'shot');
+    show('deskEmpty', !view);
+    show('liveDot', view === 'live');
+    $('deskLabel').textContent = deskGone ? 'Last frame' : view === 'live' ? 'Live desktop' : view === 'shot' ? 'Desktop' : isLocal() ? 'Local Chrome' : 'Desktop';
+    document.querySelectorAll('.dv').forEach((b) => b.classList.toggle('on', b.dataset.view === (view || deskView)));
   }
 
-  const ACTION_ICON = { open: '🌐', click: '👆', type: '⌨️', press: '⏎', scroll: '↕', wait: '⏳' };
-  function onAction(d, ev) {
-    const t = $('ticker');
+  // "Unclick working…" feed: newest row on top with a spinner; older rows settle into their final status.
+  const VERB = { open: ['Open', 'Opening…', 'Opened'], click: ['Click', 'Clicking…', 'Clicked'], type: ['Type', 'Typing…', 'Typed'],
+    press: ['Press', 'Pressing…', 'Pressed'], scroll: ['Scroll', 'Scrolling…', 'Scrolled'], wait: ['Wait', 'Waiting…', 'Done'] };
+  function activity(verb, detail, nowStatus, doneStatus, final) {
+    const box = $('activity');
+    const rows = $('ticker');
+    const prev = rows.firstElementChild;
+    if (prev && prev.classList.contains('now')) settle(prev);
     const el = document.createElement('div');
-    el.className = 'ticker-item flex items-center gap-2 rounded-lg bg-black/70 border border-white/10 px-3 py-1.5 text-[13px] max-w-full';
-    el.innerHTML = `<span class="text-base leading-none">${ACTION_ICON[d.action] || '•'}</span>
-      <span class="font-bold uppercase text-[11px] tracking-wider text-brand-300">${esc(d.action)}</span>
-      <span class="text-white truncate kbd text-[12.5px]">${esc(d.detail || ev.message)}</span>`;
-    t.appendChild(el);
-    while (t.children.length > 4) t.removeChild(t.firstChild);
-    [...t.children].forEach((c, i, arr) => { c.style.opacity = String(0.35 + 0.65 * ((i + 1) / arr.length)); });
+    el.className = 'arow ' + (final ? final : 'now');
+    el.dataset.done = doneStatus || 'Done';
+    const icon = final === 'ok' ? svg(I.check, 'ico-sm', 'stroke-width="2.6"') : final === 'bad' ? svg(I.x, 'ico-sm', 'stroke-width="2.6"') : svg(I.spin, 'ico-sm', 'stroke-width="2.4"');
+    el.innerHTML = `<span class="ai">${icon}</span><span class="av">${esc(verb)}</span><span class="ad">${esc(detail)}</span><span class="as">${esc(nowStatus)}</span>`;
+    rows.prepend(el);
+    while (rows.children.length > 3) rows.lastElementChild.remove();
+    box.hidden = false;
+  }
+  function settle(el) {
+    el.classList.remove('now');
+    el.classList.add('ok');
+    el.querySelector('.ai').innerHTML = svg(I.check, 'ico-sm', 'stroke-width="2.6"');
+    el.querySelector('.as').textContent = el.dataset.done;
+  }
+  function onAction(d, ev) {
+    const [verb, now, done] = VERB[d.action] || [d.action || 'Do', 'Working…', 'Done'];
+    if (d.action === 'open') $('activityTitle').textContent = 'Watching the page…';
+    activity(verb, d.detail || ev.message, now, done);
   }
 
   // ---------------------------------------------------------------------------
@@ -230,42 +373,46 @@
   }
 
   function onCapture(d) {
+    if (!S.captures.length) $('capList').innerHTML = '';
     S.captures.push(d);
-    $('capEmpty') && $('capEmpty').remove();
     $('capCount').textContent = S.captures.length;
     const { host, path } = splitUrl(d.url);
     const ok = d.status >= 200 && d.status < 300;
     const el = document.createElement('div');
-    el.className = 'cap anim-in flex items-center gap-2 rounded-lg bg-ink-800/70 border border-ink-700 px-2.5 py-1.5 text-[12.5px]';
+    el.className = 'cap';
     el.dataset.url = d.url;
-    el.innerHTML = `<span class="chip bg-sky-500/15 text-sky-300 border-sky-500/30 kbd">${esc(d.method || 'GET')}</span>
-      <span class="chip kbd ${ok ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' : 'bg-red-500/10 text-red-300 border-red-500/30'}">${esc(d.status)}</span>
-      <span class="truncate kbd min-w-0 flex-1"><span class="text-white font-semibold">${esc(host)}</span><span class="text-slate-400">${esc(path)}</span></span>
-      <span class="text-slate-500 kbd shrink-0">${esc(fmtSize(d.size))}</span>`;
+    el.title = d.url;
+    el.innerHTML = `<span class="method">${esc(d.method || 'GET')}</span>
+      <span class="status ${ok ? 'ok' : 'bad'}">${esc(d.status)}</span>
+      <span class="u"><b>${esc(host)}</b>${esc(path)}</span>
+      <span class="size">${esc(fmtSize(d.size))}</span>`;
     $('capList').appendChild(el);
     $('capList').scrollTop = $('capList').scrollHeight;
     if (S.endpoint) markPicked();
   }
 
   function onEndpoint(d) {
+    { const u = splitUrl(d.url); activity('Found the data source', u.host + u.path, 'Found', '', 'ok'); }
     S.endpoint = d;
     const { host, path } = splitUrl(d.url);
     const box = $('endpointBox');
-    box.classList.remove('hidden');
-    box.innerHTML = `<div class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-brand-300">
-        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg> Hidden API found</div>
-      <div class="kbd text-[14px] mt-1.5 break-all"><span class="chip bg-sky-500/15 text-sky-300 border-sky-500/30 mr-1">${esc(d.method || 'GET')}</span><span class="text-white font-bold">${esc(host)}</span><span class="text-slate-300">${esc(path)}</span></div>
-      <div class="text-[13px] text-slate-300 mt-1.5 leading-snug">${esc(d.why || '')}</div>`;
+    box.className = 'endpoint';
+    box.hidden = false;
+    box.innerHTML = `<div class="endpoint-k">${svg(I.target, 'ico-sm')}Hidden API found</div>
+      <div class="endpoint-url"><span class="chip info mono" style="height:20px;margin-right:6px">${esc(d.method || 'GET')}</span><b>${esc(host)}</b>${esc(path)}</div>
+      ${d.why ? `<div class="endpoint-why">${esc(d.why)}</div>` : ''}`;
     markPicked();
   }
 
   function markPicked() {
+    let picked = null;
     document.querySelectorAll('.cap').forEach((el) => {
       const hit = el.dataset.url === S.endpoint.url;
-      el.classList.toggle('border-brand-500/60', hit);
-      el.classList.toggle('bg-brand-500/10', hit);
-      el.classList.toggle('opacity-50', !hit);
+      el.classList.toggle('picked', hit);
+      el.classList.toggle('dim', !hit);
+      if (hit && !picked) picked = el;
     });
+    if (picked) picked.scrollIntoView({ block: 'nearest' });
   }
 
   // ---------------------------------------------------------------------------
@@ -273,32 +420,23 @@
   // ---------------------------------------------------------------------------
 
   function onEgress(d) {
+    revealCard('egCard');
     const prev = S.egress ? S.egress.allow : [];
     const allow = d.allow || [];
     const added = d.added || allow.filter((h) => !prev.includes(h));
     const removed = prev.filter((h) => !allow.includes(h));
     S.egress = { allow, added, removed, reason: d.reason };
-    const hosts = $('egressHosts');
-    const rows = allow.map((h) => {
+    const chips = allow.map((h) => {
       const isNew = added.includes(h) && prev.length > 0;
-      const first = added.includes(h) && prev.length === 0;
-      return `<div class="${isNew ? 'host-new' : first ? 'anim-in' : ''} flex items-center gap-2 rounded-lg px-2.5 py-1.5 bg-ink-800/70 border border-ink-700">
-        <svg class="w-4 h-4 ${isNew ? 'text-brand-300' : 'text-amber-300'} shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-        <span class="kbd text-[14px] ${isNew ? 'text-brand-200 font-bold' : 'text-white'} truncate">${esc(h)}</span>
-        <div class="flex-1"></div>
-        ${isNew ? '<span class="chip bg-brand-500 text-brand-ink font-bold">+ added</span>' : '<span class="chip bg-ink-700 text-slate-400">allowed</span>'}
-      </div>`;
+      return `<span class="host ${isNew ? 'new' : ''}">${svg(isNew ? I.plus : I.lock, 'ico-sm')}${esc(h)}</span>`;
     });
-    removed.forEach((h) => rows.push(`<div class="anim-in flex items-center gap-2 rounded-lg px-2.5 py-1.5 border border-red-500/25" style="animation: flashRed 2s ease-out both">
-        <svg class="w-4 h-4 text-red-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M5 5l14 14"/></svg>
-        <span class="kbd text-[14px] text-red-300/80 line-through truncate">${esc(h)}</span>
-        <div class="flex-1"></div><span class="chip bg-red-500/15 text-red-300 border-red-500/30">removed</span></div>`));
-    if (!allow.length) rows.push('<div class="chip bg-red-500/15 text-red-300 border-red-500/30">OPEN: no allowlist</div>');
-    hosts.innerHTML = rows.join('');
-    $('egressReason').innerHTML = d.reason ? `<span class="text-slate-500">Why:</span> ${esc(d.reason)}` : '';
+    removed.forEach((h) => chips.push(`<span class="host gone" title="removed">${svg(I.ban, 'ico-sm')}${esc(h)}</span>`));
+    if (!allow.length) chips.push('<span class="chip bad">Open: no allowlist</span>');
+    $('egressHosts').innerHTML = chips.join('');
+    $('egressReason').textContent = d.reason || '';
     const mode = $('egressMode');
-    mode.textContent = allow.length ? `deny-by-default · ${allow.length} host${allow.length > 1 ? 's' : ''}` : 'open';
-    mode.className = 'chip normal-case tracking-normal ' + (allow.length ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-red-500/10 text-red-300 border-red-500/30');
+    mode.textContent = allow.length ? `${allow.length} host${allow.length > 1 ? 's' : ''} allowed` : 'open';
+    mode.className = 'chip ' + (allow.length ? 'warn' : 'bad');
   }
 
   // ---------------------------------------------------------------------------
@@ -306,69 +444,80 @@
   // ---------------------------------------------------------------------------
 
   const ROLE = {
-    desktop: { label: 'Desktop', sub: 'desktop:1 · Chrome', color: 'sky' },
-    runner: { label: 'Runner', sub: 'devbox:1 · runs client.py', color: 'violet' },
-    api: { label: 'Public API', sub: 'ingress · auto-pause', color: 'brand' },
+    desktop: { label: 'Desktop', sub: 'desktop:1 · Chrome' },
+    runner: { label: 'Runner', sub: 'devbox:1 · runs client.py' },
+    api: { label: 'Public API', sub: 'ingress · auto-pause' },
   };
+  const ROLE_SUB = { desktop: 'desktop:1 · Chrome', runner: 'devbox:1 · runs client.py', api: 'ingress · auto-pause' };
+  const ROLE_SUB_LOCAL = { desktop: 'local process · local Chrome', runner: 'local process · runs client.py', api: 'local process · 127.0.0.1' };
+  function isLocal() { return S && (S.mode === 'local' || (S.mode === 'replay' && S.recordedMode === 'local')); }
+  function renderRoles() {
+    const subs = isLocal() ? ROLE_SUB_LOCAL : ROLE_SUB;
+    Object.keys(ROLE).forEach((k) => { ROLE[k].sub = subs[k]; });
+    if (S && S.sandboxes.size) renderSandboxes();
+    const local = isLocal() || (S && !S.mode && config.sandbox === 'local');
+    $('sbKicker').textContent = local ? 'Local mode' : 'CreateOS';
+    $('sbTitle').textContent = local ? 'Local sandboxes' : 'Sandboxes';
+    $('deskEmptyTitle').textContent = local ? 'Local Chrome (local sandbox mode)' : 'CreateOS desktop sandbox';
+    renderDesk();
+  }
   const STATE = {
-    created: ['Running', 'emerald'], forked: ['Running', 'emerald'], resumed: ['Running', 'emerald'],
-    pausing: ['Pausing…', 'amber'], paused: ['Paused', 'amber'], destroyed: ['Destroyed', 'slate'],
+    created: ['Running', 'ok'], forked: ['Running', 'ok'], resumed: ['Running', 'ok'],
+    pausing: ['Pausing', 'warn pulse'], paused: ['Paused', 'warn'], destroyed: ['Destroyed', ''],
   };
 
   function onSandbox(d) {
+    revealCard('sbCard');
     const prev = S.sandboxes.get(d.id) || {};
     const sb = { ...prev, id: d.id, role: d.role || prev.role, action: d.action };
     if (d.ms != null && ['created', 'forked'].includes(d.action)) sb.bootMs = d.ms;
     if (d.forked_from) sb.forkedFrom = d.forked_from;
     S.sandboxes.set(d.id, sb);
+    if (sb.role === 'desktop') {
+      S.deskId = d.id;
+      const chip = $('deskId');
+      chip.textContent = d.id;
+      show(chip, true);
+      renderDesk();
+    }
     if (d.action === 'forked' && d.forked_from) S.forks.push({ from: d.forked_from, to: d.id, ms: d.ms });
     renderSandboxes();
   }
 
   function renderSandboxes() {
     const list = [...S.sandboxes.values()];
-    $('sbCount').textContent = list.filter((s) => s.action !== 'destroyed').length;
-    $('sbList').innerHTML = list.map((s) => {
-      const r = ROLE[s.role] || { label: s.role || 'sandbox', sub: '', color: 'slate' };
-      const [st, c] = STATE[s.action] || [s.action, 'slate'];
-      const dead = s.action === 'destroyed';
-      if (dead) {
-        return `<div class="flex items-center gap-2 rounded-lg px-3 py-1 bg-ink-800/40 border border-ink-700/60 opacity-60 text-[12px]">
-          <span class="text-slate-400 font-semibold">${esc(r.label)}</span><span class="kbd text-slate-500 truncate">${esc(s.id)}</span>
-          <div class="flex-1"></div><span class="text-slate-500">destroyed · slot freed</span></div>`;
+    const live = list.filter((s) => s.action !== 'destroyed').length;
+    const sc = $('sbCount');
+    sc.textContent = `${live} active`;
+    sc.className = 'chip' + (live ? ' ok' : '');
+    // Live sandboxes first, destroyed ones collapse to one quiet line at the bottom.
+    const order = [...list.filter((s) => s.action !== 'destroyed'), ...list.filter((s) => s.action === 'destroyed')];
+    $('sbList').innerHTML = order.map((s) => {
+      const r = ROLE[s.role] || { label: s.role || 'sandbox', sub: '' };
+      const [st, c] = STATE[s.action] || [s.action, ''];
+      if (s.action === 'destroyed') {
+        return `<div class="sbrow dead">${svg(I.x, 'ico-sm')}<div class="sbname grow">${esc(r.label)} <span class="id">${esc(s.id)}</span></div><span class="faint" style="font-size:12px">destroyed · slot freed</span></div>`;
       }
-      return `<div class="anim-in flex items-center gap-2.5 rounded-xl px-3 py-2 bg-ink-800/70 border border-ink-700 ${dead ? 'opacity-45' : ''}">
-        <div class="w-8 h-8 rounded-lg bg-${r.color}-500/15 text-${r.color}-300 grid place-items-center shrink-0">${roleIcon(s.role)}</div>
-        <div class="min-w-0 flex-1">
-          <div class="flex items-center gap-2"><span class="font-semibold text-white text-[14px]">${esc(r.label)}</span><span class="kbd text-[12px] text-slate-400 truncate">${esc(s.id)}</span></div>
-          <div class="text-[11.5px] text-slate-500 truncate">${esc(r.sub)}${s.bootMs ? ` · ${s.forkedFrom ? 'forked' : 'up'} in ${fmtMs(s.bootMs)}` : ''}</div>
-        </div>
-        <span class="chip bg-${c}-500/15 text-${c}-300 border-${c}-500/30">${s.action === 'pausing' ? '<span class="blink">●</span>' : '●'} ${esc(st)}</span>
+      const meta = s.bootMs ? ` · ${s.forkedFrom ? 'forked' : 'up'} in ${fmtMs(s.bootMs)}` : '';
+      return `<div class="sbrow">
+        <div class="sbicon ${esc(s.role)}">${svg(s.role === 'desktop' ? I.desktop : s.role === 'api' ? I.globe : I.term)}</div>
+        <div class="grow"><div class="sbname">${esc(r.label)} <span class="id">${esc(s.id)}</span></div><div class="sbsub">${esc(r.sub)}${esc(meta)}</div></div>
+        <span class="chip ${c}"><span class="dot"></span>${esc(st)}</span>
       </div>`;
-    }).join('') || '<div class="text-slate-600 text-sm">No sandboxes yet</div>';
+    }).join('') || '<div class="empty">No sandboxes yet</div>';
 
     const fb = $('forkBox');
     if (S.forks.length) {
       const f = S.forks[S.forks.length - 1];
-      const from = S.sandboxes.get(f.from) || { role: 'runner', id: f.from };
-      const to = S.sandboxes.get(f.to) || { role: 'api', id: f.to };
-      fb.classList.remove('hidden');
-      fb.innerHTML = `<div class="rounded-xl border border-brand-500/30 bg-brand-500/5 px-3 py-2.5">
-        <div class="text-[11px] font-bold uppercase tracking-wider text-brand-300 mb-1.5">Fork · same warm state, tighter policy</div>
-        <div class="flex items-center gap-2">
-          <div class="text-center min-w-0"><div class="text-[12px] font-semibold text-white">${esc((ROLE[from.role] || {}).label || from.role)}</div><div class="kbd text-[11px] text-slate-500 truncate">${esc(f.from)}</div></div>
-          <svg class="flex-1 h-6 min-w-[60px]" viewBox="0 0 100 24" preserveAspectRatio="none"><path class="fork-path" d="M2 12 H90" stroke-width="2" fill="none"/><path class="fork-head" d="M88 6 L98 12 L88 18" stroke-width="2.2" fill="none"/></svg>
-          <div class="text-center min-w-0"><div class="text-[12px] font-semibold text-white">${esc((ROLE[to.role] || {}).label || to.role)}</div><div class="kbd text-[11px] text-slate-500 truncate">${esc(f.to)}</div></div>
-        </div>
-        ${f.ms ? `<div class="text-center text-[11.5px] text-brand-300/80 mt-1">memory + disk copied in ${fmtMs(f.ms)}</div>` : ''}
-      </div>`;
+      const from = S.sandboxes.get(f.from) || { role: 'runner' };
+      const to = S.sandboxes.get(f.to) || { role: 'api' };
+      fb.hidden = false;
+      fb.className = 'fork';
+      fb.innerHTML = `<div class="fork-row"><span class="fork-k">Fork</span><span>${esc((ROLE[from.role] || {}).label || from.role)}</span>
+          <svg viewBox="0 0 100 14" preserveAspectRatio="none"><path class="fork-path" d="M2 7 H92" stroke-width="2" fill="none"/><path d="M88 2 L98 7 L88 12" stroke="rgb(var(--accent))" stroke-width="2" fill="none"/></svg>
+          <span>${esc((ROLE[to.role] || {}).label || to.role)}</span>${f.ms ? `<b class="mono" style="margin-left:4px">${esc(fmtMs(f.ms))}</b>` : ''}</div>
+        <div class="fork-sub">Same warm memory + disk, tighter egress</div>`;
     }
-  }
-
-  function roleIcon(role) {
-    if (role === 'desktop') return '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
-    if (role === 'api') return '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>';
-    return '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 7 5 5-5 5M12 19h7"/></svg>';
   }
 
   function onPause(d) {
@@ -380,20 +529,18 @@
   function renderPause() {
     const p = S.pause;
     const box = $('pauseBox');
-    if (!p) { box.classList.add('hidden'); return; }
-    box.classList.remove('hidden');
+    if (!p) { box.hidden = true; return; }
+    box.hidden = false;
     const cfg = {
-      paused: ['amber', '<svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z"/></svg>', 'Paused', 'Idle → auto-paused. Costs nothing until the next request.'],
-      waking: ['sky', '<svg class="w-6 h-6 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>', 'Waking…', 'Request arrived: resuming on demand'],
-      awake: ['emerald', '<svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>', 'Awake', 'Wake-on-request'],
-    }[p.state] || ['slate', '', p.state, ''];
-    const [c, icon, label, sub] = cfg;
-    box.innerHTML = `<div class="anim-in flex items-center gap-3 rounded-xl px-3 py-2.5 bg-${c}-500/10 border border-${c}-500/35">
-      <div class="text-${c}-300">${icon}</div>
-      <div class="flex-1 min-w-0"><div class="font-bold text-${c}-200 text-[15px]">API ${label}</div><div class="text-[11.5px] text-slate-400 truncate">${sub}</div></div>
-      ${p.state === 'awake' && p.wake_ms != null ? `<div class="text-right shrink-0"><div class="text-[22px] font-extrabold text-white tabular-nums leading-none">${fmtMs(p.wake_ms)}</div><div class="text-[10.5px] uppercase tracking-wider text-slate-500 mt-0.5">wake latency</div></div>` : ''}
-    </div>`;
-    const sc = $('sbScroll');
+      paused: [svg(I.moon), 'API paused', 'Idle → auto-paused. No vCPU billing until the next request.'],
+      waking: [svg(I.spin, 'ico', 'style="animation:spin .8s linear infinite"'), 'Waking…', 'Request arrived: resuming on demand'],
+      awake: [svg(I.bolt), 'API awake', 'Woke on request'],
+    }[p.state] || ['', p.state, ''];
+    const [icon, label, sub] = cfg;
+    box.className = 'pauserow ' + esc(p.state);
+    box.innerHTML = `${icon}<div class="grow"><div class="pt">${esc(label)}</div><div class="ps">${esc(sub)}</div></div>
+      ${p.state === 'awake' && p.wake_ms != null ? `<div class="pv"><b>${esc(fmtMs(p.wake_ms))}</b><span>wake</span></div>` : ''}`;
+    const sc = box.parentElement;
     sc.scrollTop = sc.scrollHeight;
   }
 
@@ -402,11 +549,12 @@
   // ---------------------------------------------------------------------------
 
   function onCode(d) {
+    activity('Writing code', `${d.filename || 'client.py'} · attempt ${d.attempt}`, 'Writing…', 'Written');
+    revealAgent();
     S.codes = S.codes.filter((c) => c.attempt !== d.attempt);
     S.codes.push(d);
     S.codes.sort((a, b) => a.attempt - b.attempt);
     S.selAttempt = d.attempt;
-    $('codeCount').textContent = S.codes.length;
     renderPills();
     renderCode(true);
     renderStepper();
@@ -424,9 +572,8 @@
     $('attemptPills').innerHTML = S.codes.map((c) => {
       const st = attemptState(c.attempt);
       const sel = c.attempt === S.selAttempt;
-      const col = st === 'ok' ? 'emerald' : st === 'fail' ? 'red' : st === 'ran' ? 'sky' : 'slate';
       const mark = st === 'ok' ? '✓' : st === 'fail' ? '✕' : st === 'ran' ? '▶' : '…';
-      return `<button data-attempt="${c.attempt}" class="chip ${sel ? `bg-${col}-500/25 text-white border-${col}-400/70` : `bg-${col}-500/10 text-${col}-300 border-${col}-500/25`}">${mark} Attempt ${c.attempt}</button>`;
+      return `<button type="button" data-attempt="${c.attempt}" class="pill ${st} ${sel ? 'on' : ''}"><span class="m">${mark}</span>Attempt ${c.attempt}</button>`;
     }).join('');
   }
 
@@ -473,8 +620,8 @@
     }
     const view = $('codeView');
     view.innerHTML = rows.join('');
-    const diffTxt = prev ? ` · <span class="text-emerald-400">+${added}</span> <span class="text-red-400">−${removed}</span> vs attempt ${prev.attempt}` : '';
-    $('codeMeta').innerHTML = `<span class="kbd text-slate-300">${esc(cur.filename || 'client.py')}</span> · ${curCode.split('\n').length} lines${diffTxt}`;
+    const diffTxt = prev ? ` · <span class="add">+${added}</span> <span class="del">−${removed}</span> vs #${prev.attempt}` : '';
+    $('codeMeta').innerHTML = `<span class="mono" style="color:rgb(var(--text-2))">${esc(cur.filename || 'client.py')}</span> · ${curCode.split('\n').length} lines${diffTxt}`;
     if (firstChange >= 0) {
       const el = view.children[firstChange];
       if (el) view.scrollTop = Math.max(0, el.offsetTop - view.clientHeight * 0.3);
@@ -483,59 +630,65 @@
 
   function line(kind, n, html, delayIdx) {
     const gut = kind === 'add' ? '+' : kind === 'del' ? '−' : '';
-    const style = delayIdx >= 0 ? ` style="animation: slideIn .25s ease-out both; animation-delay:${Math.min(delayIdx * 28, 1600)}ms"` : '';
-    return `<div class="code-line ${kind}"${style}><span class="ln">${n}</span><span class="gut">${gut}</span><span class="src">${html || ' '}</span></div>`;
+    const anim = delayIdx >= 0 ? ` new" style="animation-delay:${Math.min(delayIdx * 22, 1400)}ms` : '';
+    return `<div class="code-line ${kind}${anim}"><span class="ln">${n}</span><span class="gut">${gut}</span><span class="src">${html || ' '}</span></div>`;
   }
+
+  // Let long URLs wrap at / . - ? & instead of mid-word.
+  function breakable(u) { return esc(u).replace(/([/.?&-])/g, '$1<wbr>'); }
 
   function clip(s, max = 60) {
     const lines = String(s || '').split('\n');
     return lines.length > max ? lines.slice(0, max).join('\n') + `\n… (${lines.length - max} more lines)` : String(s || '');
   }
 
+  function clearEmpty(pane, n) { if (n === 1) pane.innerHTML = ''; }
+
   function onRun(d) {
+    activity('Running it', `attempt ${d.attempt}`, d.exit_code === 0 ? 'Ran cleanly' : `Error · exit ${d.exit_code}`, '', d.exit_code === 0 ? 'ok' : 'bad');
     S.runs.push(d);
     $('runCount').textContent = S.runs.length;
     const ok = d.exit_code === 0;
     const el = document.createElement('div');
-    el.className = 'anim-in rounded-xl border ' + (ok ? 'border-emerald-500/35' : 'border-red-500/40') + ' bg-ink-900 overflow-hidden';
-    el.innerHTML = `<div class="flex items-center gap-2 px-3 py-2 ${ok ? 'bg-emerald-500/10' : 'bg-red-500/10'}">
-        <span class="kbd text-[12.5px] text-slate-300">$ python client.py</span>
-        <span class="text-[12px] text-slate-500">attempt ${esc(d.attempt)}</span>
-        <div class="flex-1"></div>
-        <span class="text-[12px] text-slate-400 kbd">${esc(fmtMs(d.ms))}</span>
-        <span class="chip ${ok ? 'bg-emerald-500 text-ink-950' : 'bg-red-500 text-white'} font-bold">exit ${esc(d.exit_code)}</span>
+    el.className = 'box ' + (ok ? 'ok' : 'bad');
+    el.innerHTML = `<div class="box-h">
+        <span class="cmd">$ python ${esc((S.codes.find((c) => c.attempt === d.attempt) || {}).filename || 'client.py')}</span>
+        <span class="faint">attempt ${esc(d.attempt)}</span>
+        <span class="grow"></span>
+        <span class="mono faint" style="font-size:12px">${esc(fmtMs(d.ms))}</span>
+        <span class="chip ${ok ? 'solid-ok' : 'solid-bad'}">exit ${esc(d.exit_code)}</span>
       </div>
-      ${d.stderr ? `<pre class="term text-red-300 px-3 py-2 bg-red-500/5 border-t border-red-500/20">${esc(clip(d.stderr, 40))}</pre>` : ''}
-      ${d.stdout ? `<pre class="term text-slate-200 px-3 py-2 border-t border-ink-700">${esc(clip(d.stdout, 60))}</pre>` : ''}
-      ${!d.stdout && !d.stderr ? '<div class="term text-slate-600 px-3 py-2">(no output)</div>' : ''}`;
+      ${d.stderr ? `<pre class="term err">${esc(clip(d.stderr, 40))}</pre>` : ''}
+      ${d.stdout ? `<pre class="term">${esc(clip(d.stdout, 60))}</pre>` : ''}
+      ${!d.stdout && !d.stderr ? '<div class="term faint">(no output)</div>' : ''}`;
     const pane = $('pane-runs');
-    if (S.runs.length === 1) pane.innerHTML = '';
+    clearEmpty(pane, S.runs.length);
     pane.appendChild(el);
     if (follow) showRTab('runs');
-    // Show the start of the newest run's output
-    pane.scrollTop = el.offsetTop - 8;
+    pane.scrollTop = el.offsetTop - 12;
     renderPills();
   }
 
   function onVerify(d) {
+    activity('Checking it matches the screen', `attempt ${d.attempt}`, d.ok ? 'Matches' : 'Does not match', '', d.ok ? 'ok' : 'bad');
     S.verifies.push(d);
     $('verifyCount').textContent = S.verifies.length;
     const el = document.createElement('div');
-    el.className = 'anim-in rounded-xl border ' + (d.ok ? 'border-emerald-500/40' : 'border-red-500/40') + ' bg-ink-900 overflow-hidden';
-    el.innerHTML = `<div class="flex items-center gap-2 px-3 py-2 ${d.ok ? 'bg-emerald-500/10' : 'bg-red-500/10'}">
-        <span class="chip ${d.ok ? 'bg-emerald-500 text-ink-950' : 'bg-red-500 text-white'} font-bold">${d.ok ? '✓ MATCH' : '✕ MISMATCH'}</span>
-        <span class="text-[12.5px] text-slate-400">attempt ${esc(d.attempt)}</span>
+    el.className = 'box ' + (d.ok ? 'ok' : 'bad');
+    el.innerHTML = `<div class="box-h">
+        <span class="chip ${d.ok ? 'solid-ok' : 'solid-bad'}">${d.ok ? '✓ Match' : '✕ Mismatch'}</span>
+        <span class="faint">attempt ${esc(d.attempt)}</span>
       </div>
-      <div class="grid grid-cols-2 gap-px bg-ink-700">
-        <div class="bg-ink-900 p-2.5 min-w-0"><div class="text-[10.5px] uppercase tracking-wider font-bold text-slate-500 mb-1">Expected · from the screen</div><pre class="term text-slate-200">${esc(clip(d.expected, 14))}</pre></div>
-        <div class="bg-ink-900 p-2.5 min-w-0"><div class="text-[10.5px] uppercase tracking-wider font-bold ${d.ok ? 'text-emerald-400' : 'text-red-400'} mb-1">Got · from client.py</div><pre class="term ${d.ok ? 'text-emerald-200' : 'text-red-300'}">${esc(clip(d.got, 14))}</pre></div>
+      <div class="vgrid">
+        <div><div class="vk">Expected · on screen</div><pre class="term">${esc(clip(d.expected, 14))}</pre></div>
+        <div><div class="vk ${d.ok ? 'ok' : 'bad'}">Got · from client.py</div><pre class="term" style="color:rgb(var(${d.ok ? '--ok' : '--bad'}))">${esc(clip(d.got, 14))}</pre></div>
       </div>
-      ${d.notes ? `<div class="px-3 py-2 text-[13px] text-slate-300 border-t border-ink-700"><span class="text-slate-500">Agent:</span> ${esc(d.notes)}</div>` : ''}`;
+      ${d.notes ? `<div class="vnote"><span class="faint">Agent:</span> ${esc(d.notes)}</div>` : ''}`;
     const pane = $('pane-verify');
-    if (S.verifies.length === 1) pane.innerHTML = '';
+    clearEmpty(pane, S.verifies.length);
     pane.appendChild(el);
     if (follow) showRTab('verify');
-    pane.scrollTop = el.offsetTop - 8;
+    pane.scrollTop = el.offsetTop - 12;
     renderPills();
   }
 
@@ -543,87 +696,583 @@
   // Publish / API card / billing
   // ---------------------------------------------------------------------------
 
+  function apiBase(u) { return String(u || '').replace(/\/v1\/run\/?$/, '').replace(/\/$/, ''); }
+
   function onPublish(d) {
-    S.publish = d;
-    $('netPanel').classList.add('hidden');
-    const card = $('apiCard');
-    card.classList.remove('hidden');
-    card.innerHTML = `
-      <div class="flex items-center gap-2 px-4 pt-3.5">
-        <span class="live-dot"></span>
-        <span class="text-[12px] font-extrabold tracking-[.14em] text-brand-300">LIVE API</span>
-        <span class="chip bg-ink-800 border-ink-600 text-slate-400 kbd">${esc(d.sandbox_id || '')}</span>
-        <div class="flex-1"></div>
-        ${d.docs_url ? `<a href="${esc(d.docs_url)}" target="_blank" rel="noopener" class="text-[12px] text-slate-400 hover:text-white underline underline-offset-2">OpenAPI docs ↗</a>` : ''}
-      </div>
-      <div class="px-4 pt-2 flex items-center gap-2">
-        <div class="kbd text-[19px] font-bold text-white break-all leading-snug flex-1 min-w-0">${esc(d.api_url)}</div>
-        <button data-copy="url" class="shrink-0 h-8 px-2.5 rounded-lg bg-ink-700 hover:bg-ink-600 text-[12px] font-semibold">Copy</button>
-      </div>
-      <div class="mx-4 mt-2.5 rounded-xl bg-black/50 border border-ink-700 px-3 py-2 flex items-start gap-2">
-        <span class="kbd text-brand-400 text-[13px] select-none">$</span>
-        <code class="kbd text-[12.5px] text-slate-200 break-all flex-1 min-w-0">${esc(d.curl || '')}</code>
-        <button data-copy="curl" class="shrink-0 h-7 px-2.5 rounded-lg bg-ink-700 hover:bg-ink-600 text-[12px] font-semibold">Copy curl</button>
-      </div>
-      <div class="px-4 pt-3 flex items-center gap-2">
-        <button id="tryBtn" class="h-10 px-4 rounded-xl bg-brand-500 hover:bg-brand-400 text-brand-ink font-bold text-sm flex items-center gap-2">
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg>Try it</button>
-        <button id="wakeBtn" class="h-10 px-4 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-sky-200 font-bold text-sm flex items-center gap-2">
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z"/></svg>Wake test</button>
-        <div class="flex-1"></div>
-        <div id="tryMeta" class="flex items-center gap-2"></div>
-      </div>
-      <div class="flex-1 min-h-0 mx-4 mt-3 mb-4 rounded-xl bg-black/40 border border-ink-700 overflow-auto scroll-thin">
-        <pre id="tryOut" class="term text-[12.5px] p-3 text-slate-500">Press “Try it” to call the API. No LLM in the hot path, just the generated client.</pre>
-      </div>`;
+    // Newer publish events carry openapi_url / mcp_url / mcp_config / fields; derive sensible defaults when missing.
+    const base = apiBase(d.api_url);
+    const keyM = /X-(?:Unclick|API)-Key:\s*([^'"\s]+)/i.exec(d.curl || '');
+    const name = d.tool_name || d.name || 'unclick';
+    S.publish = {
+      ...d,
+      key: keyM ? keyM[1] : '',
+      keyHeader: (/(X-(?:Unclick|API)-Key)/i.exec(d.curl || '') || [])[1] || 'X-Unclick-Key',
+      openapi_url: d.openapi_url || (base ? base + '/openapi.json' : ''),
+      mcp_url: d.mcp_url || (base ? base + '/mcp' : ''),
+      mcp_config: d.mcp_config || (base ? JSON.stringify({ mcpServers: { [name]: { url: base + '/mcp', headers: keyM ? { 'X-Unclick-Key': keyM[1] } : {} } } }, null, 2) : ''),
+    };
+    revealCard('payCard');
+    renderApiPage();
     startStatusPoll();
-    card.querySelector('#tryBtn').onclick = tryIt;
-    card.querySelector('#wakeBtn').onclick = wakeTest;
-    card.querySelectorAll('[data-copy]').forEach((b) => {
-      b.onclick = () => copy(b.dataset.copy === 'url' ? d.api_url : d.curl, b);
-    });
     renderStepper();
+    setFocus();
+    renderSummary();
+    refreshCatalogCount();
+    setState('result');
+    window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }
+
+  // ---------------------------------------------------------------------------
+  // API page (result state)
+  // ---------------------------------------------------------------------------
+
+  function initialParams() {
+    // From the curl example's query string (e.g. ?limit=10); the OpenAPI doc can add more later.
+    const out = {};
+    const m = /'(https?:\/\/[^']+)'/.exec(S.publish.curl || '') || [null, S.publish.api_url];
+    try { new URL(m[1]).searchParams.forEach((v, k) => { out[k] = v; }); } catch { /* ignore */ }
+    if (!Object.keys(out).length) out.limit = '10';
+    return out;
+  }
+
+  function apiUrlWith(params) {
+    try {
+      const u = new URL(S.publish.api_url);
+      Object.entries(params).forEach(([k, v]) => { if (v !== '' && v != null) u.searchParams.set(k, v); else u.searchParams.delete(k); });
+      return u.toString();
+    } catch { return S.publish.api_url; }
+  }
+
+  function currentParams() {
+    const out = {};
+    document.querySelectorAll('#params input').forEach((i) => { out[i.name] = i.value.trim(); });
+    return out;
+  }
+
+  function priceText() {
+    const calls = (billingCfg && billingCfg.calls) || 100;
+    const cents = billingCfg && billingCfg.amount_cents != null ? billingCfg.amount_cents : 500;
+    const per = cents / calls / 100;
+    return stripeOff() ? 'Demo key · unmetered' : `$${per.toFixed(per < 0.1 ? 2 : 2)} / call · test mode`;
+  }
+
+  function apiDisplayName() {
+    const P = S.publish;
+    if (P.name && P.name !== P.api_id && P.name !== P.sandbox_id) return P.name;
+    let host = '';
+    try { host = new URL($('runUrl').textContent || $('urlIn').value).host.replace(/^www\./, ''); } catch { /* ignore */ }
+    return host ? `${host} API` : 'Your API';
+  }
+
+  function renderApiPage() {
+    const P = S.publish;
+    const page = $('apiPage');
+    const src = $('runUrl').textContent || $('urlIn').value;
+    const params = initialParams();
+    page.innerHTML = `
+      <div class="card api-head">
+        <div class="api-badges">
+          <span class="live-pill"><span class="dot"></span>LIVE</span>
+          <span class="method">GET</span>
+          <span id="healthChip"><span class="chip" title="Not verified since publishing">Verified at publish</span></span>
+          <span class="chip stripe" id="priceChip">${esc(priceText())}</span>
+        </div>
+        <h2 class="api-name">${esc(apiDisplayName())}</h2>
+        <div class="api-src">From <a href="${esc(src)}" target="_blank" rel="noopener">${esc(src.replace(/^https?:\/\//, ''))}</a>${$('runTask').textContent ? ` · ${esc($('runTask').textContent)}` : ''}</div>
+        <div class="urlbox"><span class="u">${breakable(P.api_url)}</span><button type="button" class="btn btn-ghost btn-sm" data-copy-text="${esc(P.api_url)}">${svg(I.copy, 'ico-sm')}Copy URL</button></div>
+        <div class="api-actions">
+          <button type="button" id="apiVerify" class="btn btn-ghost">${svg(I.check, 'ico-sm')}Verify</button>
+          <button type="button" id="apiHeal" class="btn btn-ghost">${svg(I.bolt, 'ico-sm')}Self-heal</button>
+          <button type="button" id="wakeBtn" class="btn btn-ghost" title="Pause-and-wake round trip">${svg(I.moon, 'ico-sm')}Wake test</button>
+          ${P.docs_url ? `<a class="btn btn-ghost" href="${esc(P.docs_url)}" target="_blank" rel="noopener">Docs ${svg(I.ext, 'ico-sm')}</a>` : ''}
+          <span class="grow"></span>
+          <button type="button" class="btn btn-ink" data-new>Build another</button>
+        </div>
+      </div>
+      <div class="api-grid">
+        <div class="card api-card">
+          <div class="card-h"><span class="card-title">Try it</span><span class="grow"></span><span class="faint small">Real request, no LLM involved</span></div>
+          <div class="card-b">
+            <form id="playForm" class="playform" autocomplete="off">
+              <div id="params" class="params">${Object.entries(params).map(([k, v]) => `<label class="param"><span>${esc(k)}</span><input name="${esc(k)}" value="${esc(v)}" inputmode="${/^\d+$/.test(v) ? 'numeric' : 'text'}" /></label>`).join('')}</div>
+              <div class="send-row" style="margin-top:12px">
+                <button type="submit" id="tryBtn" class="btn btn-primary">${svg(I.play, 'ico-sm')}Send request</button>
+                <div id="tryMeta" class="resp-meta" aria-live="polite"></div>
+              </div>
+            </form>
+            <div class="resp" id="respBox"><div class="hint">Press <b>Send request</b> to call your API. The response appears here.</div></div>
+          </div>
+        </div>
+        <div class="card api-card">
+          <div class="card-h"><span class="card-title">Use it</span><span class="grow"></span>
+            <div class="codetabs" role="tablist" id="codeTabs">
+              ${['curl', 'Python', 'JavaScript', 'MCP'].map((t, i) => `<button type="button" role="tab" data-ct="${t}" class="${i ? '' : 'on'}">${t}</button>`).join('')}
+            </div>
+          </div>
+          <div class="card-b">
+            <div class="codebox"><pre id="codeOut"></pre><button type="button" class="btn btn-ghost btn-sm copy" id="codeCopy">${svg(I.copy, 'ico-sm')}Copy</button></div>
+            <div class="code-note" id="codeNote"></div>
+          </div>
+        </div>
+      </div>
+      <div class="api-grid">
+        <div class="card api-card">
+          <div class="card-h"><span class="card-title">Schema</span><span class="grow"></span><span class="faint small" id="schemaSrc"></span></div>
+          <div class="card-b"><div class="fields" id="schemaFields"><span class="skel" style="width:120px;height:26px"></span><span class="skel" style="width:90px;height:26px"></span><span class="skel" style="width:110px;height:26px"></span></div></div>
+        </div>
+        <div class="card api-card speedcard" id="speedCard"></div>
+      </div>`;
+    page.hidden = false;
+    page.querySelector('#playForm').addEventListener('submit', (e) => { e.preventDefault(); sendTry(); });
+    page.querySelector('#wakeBtn').onclick = wakeTest;
+    page.querySelector('#apiVerify').onclick = () => apiAction('verify');
+    page.querySelector('#apiHeal').onclick = () => apiAction('heal');
+    page.querySelector('[data-new]').onclick = buildAnother;
+    page.querySelectorAll('[data-copy-text]').forEach((b) => { b.onclick = () => copy(b.dataset.copyText, b); });
+    page.querySelectorAll('[data-ct]').forEach((b) => { b.onclick = () => showCodeTab(b.dataset.ct); });
+    page.querySelector('#params').addEventListener('input', () => showCodeTab(currentCodeTab));
+    showCodeTab('curl');
+    renderSpeed();
+    loadSchema().then(({ fields, src: s2 }) => renderSchema(fields, s2));
+    loadOpenApiParams();
+  }
+
+  let currentCodeTab = 'curl';
+  function showCodeTab(t) {
+    currentCodeTab = t;
+    const P = S.publish;
+    document.querySelectorAll('[data-ct]').forEach((b) => b.classList.toggle('on', b.dataset.ct === t));
+    const url = apiUrlWith(currentParams());
+    const kh = P.keyHeader;
+    const key = P.key || 'YOUR_KEY';
+    let code = '', note = '', lang = 'bash';
+    if (t === 'curl') { code = `curl -s '${url}' \\\n  -H '${kh}: ${key}'`; note = 'Works from any terminal.'; }
+    else if (t === 'Python') { lang = 'python'; code = `import httpx\n\nr = httpx.get(\n    "${url}",\n    headers={"${kh}": "${key}"},\n    timeout=60,\n)\nr.raise_for_status()\nrows = r.json()\nprint(len(rows), "rows")`; note = 'pip install httpx'; }
+    else if (t === 'JavaScript') { lang = 'javascript'; code = `const r = await fetch("${url}", {\n  headers: { "${kh}": "${key}" },\n});\nconst rows = await r.json();\nconsole.log(rows.length, "rows");`; note = 'Node 18+ or any browser (server-side keeps your key private).'; }
+    else { lang = 'json'; code = prettyJson(P.mcp_config); note = P.mcp_url ? `Paste into Claude Desktop or Cursor's MCP settings. Endpoint: ${P.mcp_url}` : 'This API was published without an MCP endpoint.'; }
+    const out = $('codeOut');
+    try { out.innerHTML = hljs.highlight(code, { language: lang, ignoreIllegals: true }).value; } catch { out.textContent = code; }
+    $('codeNote').textContent = note;
+    $('codeCopy').onclick = (e) => copy(code, e.currentTarget);
+    $('codeCopy').innerHTML = `${svg(I.copy, 'ico-sm')}${t === 'MCP' ? 'Copy config' : 'Copy'}`;
+  }
+
+  function renderSchema(fields, src) {
+    const box = $('schemaFields');
+    if (!box) return;
+    box.innerHTML = fields.length
+      ? fields.map((f, i) => `<span class="field-chip" style="animation-delay:${i * 50}ms"><span class="n">${esc(f.name)}${f.required === false ? '?' : ''}</span><span class="t ${esc(String(f.type).split('|')[0])}">${esc(f.type)}</span></span>`).join('')
+      : '<span class="faint">Send a request to see the fields.</span>';
+    $('schemaSrc').textContent = fields.length ? src : '';
+  }
+
+  async function loadOpenApiParams() {
+    const P = S.publish;
+    if (!P.openapi_url || S.fake) return;
+    try {
+      const r = await fetch(P.openapi_url);
+      if (!r.ok) return;
+      const doc = await r.json();
+      const op = Object.values(doc.paths || {}).map((o) => o && o.get).find(Boolean);
+      const ps = (op && op.parameters || []).filter((x) => x.in === 'query' && !/key/i.test(x.name));
+      if (!ps.length) return;
+      const cur = currentParams();
+      $('params').innerHTML = ps.map((x) => {
+        const v = cur[x.name] ?? (x.schema && x.schema.default != null ? x.schema.default : '');
+        return `<label class="param" title="${esc(x.description || '')}"><span>${esc(x.name)}${x.required ? '' : '?'}</span><input name="${esc(x.name)}" value="${esc(v)}" /></label>`;
+      }).join('');
+      showCodeTab(currentCodeTab);
+    } catch { /* CORS: keep the params from the curl example */ }
+  }
+
+  function rowCount(v) {
+    if (Array.isArray(v)) return v.length;
+    if (v && typeof v === 'object') { const a = Object.values(v).find(Array.isArray); return a ? a.length : null; }
+    return null;
+  }
+
+  async function sendTry() {
+    const btn = $('tryBtn');
+    const box = $('respBox');
+    btn.disabled = true;
+    btn.title = 'Waiting for the response';
+    $('tryMeta').innerHTML = '<span class="chip info pulse"><span class="dot"></span>Calling your API…</span>';
+    box.innerHTML = '<div style="padding:14px 16px"><div class="skel skel-row" style="width:40%"></div><div class="skel skel-row"></div><div class="skel skel-row" style="width:75%"></div></div>';
+    const url = apiUrlWith(currentParams());
+    try {
+      const r = await fetch('/api/try', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run_id: S.runId, api_url: url, key: boughtKey() }) });
+      const j = await r.json().catch(() => ({}));
+      if (j.key_rejected) { try { localStorage.removeItem('unclick.key'); } catch { /* ignore */ } toast('Your stored key was rejected, so the demo key was used'); }
+      const ok = j.status >= 200 && j.status < 300;
+      if (!ok) {
+        const why = j.status === 402 ? 'Out of calls. Buy more calls to keep using this API.' : j.status === 409 ? 'This is a replay: the API it published is not running any more.' : (j.error || j.detail || (j.json && j.json.error) || `The API answered ${j.status || 'with an error'}.`);
+        throw new Error(typeof why === 'string' ? why : JSON.stringify(why));
+      }
+      S.tryMs = j.ms;
+      if (j.json && typeof j.json === 'object') S.lastTry = j.json;
+      const n = rowCount(j.json);
+      S.pendingCharge = true;
+      $('tryMeta').innerHTML = `<span class="chip solid-ok">${esc(j.status)} OK</span><span><b>${esc(fmtMs(j.ms))}</b></span>${n != null ? `<span><b>${n}</b> rows</span>` : ''}<span id="chargeNote"></span>`;
+      renderChargeNote();
+      const txt = JSON.stringify(j.json, null, 2);
+      box.innerHTML = '<pre></pre>';
+      try { box.firstChild.innerHTML = hljs.highlight(txt, { language: 'json' }).value; } catch { box.firstChild.textContent = txt; }
+      renderSpeed();
+      if (!(S.publish.fields || []).length) loadSchema().then(({ fields, src }) => renderSchema(fields, src));
+    } catch (err) {
+      $('tryMeta').innerHTML = '';
+      box.innerHTML = `<div class="err">${svg(I.x, 'ico')}<span>${esc(err.message === 'Failed to fetch' ? 'Could not reach the Unclick server. Check that it is running.' : err.message)}</span><button type="button" class="btn btn-ghost btn-sm" id="retryTry">Retry</button></div>`;
+      $('retryTry').onclick = sendTry;
+    } finally { btn.disabled = false; btn.title = ''; }
+  }
+
+  function renderChargeNote() {
+    const el = $('chargeNote');
+    if (!el || !S.pendingCharge) return;
+    const B = S.billing;
+    if (B.calls == null) { el.textContent = ''; return; }
+    el.innerHTML = stripeOff() ? `1 demo call used · <b style="font-size:15px">${esc(B.calls)}</b> left` : `charged 1 call · <b style="font-size:15px">${esc(B.calls)}</b> left`;
+  }
+
+  async function apiAction(kind) {
+    const P = S.publish;
+    const id = P.api_id || P.sandbox_id;
+    const btn = $(kind === 'verify' ? 'apiVerify' : 'apiHeal');
+    btn.disabled = true;
+    const old = btn.innerHTML;
+    btn.innerHTML = `${svg(I.spin, 'ico-sm', 'style="animation:spin .8s linear infinite"')}${kind === 'verify' ? 'Verifying…' : 'Healing…'}`;
+    try {
+      const r = await fetch(`/api/apis/${encodeURIComponent(id)}/${kind}`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 404) throw new Error(S.fake ? 'Scripted demo APIs are not saved to My APIs, so there is nothing to verify.' : 'This API is not in My APIs yet.');
+      if (!r.ok) throw new Error(j.detail || r.statusText);
+      if (kind === 'verify') {
+        onHealth({ api_id: id, ok: j.ok, healthy: j.healthy ?? j.ok, last_verified: j.last_verified, problems: j.problems });
+        toast(j.ok ? 'Verified: the output still matches the schema' : `Needs attention: ${(j.problems || [])[0] || 'verification failed'}`, 3500, j.ok ? 'ok' : 'bad');
+      } else if (j.run_id) {
+        toast('Self-heal started: re-running the agent', 3000, 'ok');
+        attach(j.run_id, undefined, j.mode ? { mode: j.mode } : undefined);
+      } else toast(j.ok ? 'Healthy: nothing to heal' : 'Self-heal did not start', 3000, j.ok ? 'ok' : 'bad');
+    } catch (err) { toast(err.message, 4500, 'bad'); }
+    finally { if (document.body.contains(btn)) { btn.disabled = false; btn.innerHTML = old; } }
+  }
+
+  function showLTab(name) {
+    const P = S.publish;
+    if (!P) return;
+    document.querySelectorAll('[data-ltab]').forEach((b) => b.classList.toggle('on', b.dataset.ltab === name));
+    const pane = $('lpane');
+    const hint = $('ltabHint');
+    if (name === 'curl') {
+      hint.textContent = 'Call it from anywhere';
+      pane.innerHTML = `<div class="lpane"><span class="p">$</span><code>${esc(P.curl || `curl -s '${P.api_url}'`)}</code><button type="button" class="btn btn-ghost btn-sm" data-c>${svg(I.copy, 'ico-sm')}curl</button></div>`;
+      pane.querySelector('[data-c]').onclick = (e) => copy(P.curl || P.api_url, e.currentTarget);
+    } else if (name === 'mcp') {
+      hint.textContent = 'Use as a tool in Claude / Cursor';
+      pane.innerHTML = P.mcp_url ? `<div class="lpane"><div class="lpane-col">
+          <div class="mcp-url"><b>MCP</b>${breakable(P.mcp_url)}</div>
+          <pre>${esc(prettyJson(P.mcp_config))}</pre></div>
+          <button type="button" class="btn btn-ink btn-sm" data-c title="Copy the config for Claude Desktop / Cursor">${svg(I.copy, 'ico-sm')}Use as a tool</button></div>`
+        : '<div class="lpane faint">This API was published without an MCP endpoint.</div>';
+      const b = pane.querySelector('[data-c]');
+      if (b) b.onclick = (e) => copy(P.mcp_config, e.currentTarget);
+    } else {
+      hint.textContent = 'Typed response fields';
+      pane.innerHTML = '<div class="lpane faint">Loading schema…</div>';
+      loadSchema().then(({ fields, src }) => {
+        if (!S.publish || !document.querySelector('[data-ltab="schema"].on')) return;
+        pane.innerHTML = fields.length
+          ? `<div class="lpane"><div class="fields">${fields.map((f, i) => `<span class="field-chip" style="animation-delay:${i * 50}ms"><span class="n">${esc(f.name)}${f.required === false ? '?' : ''}</span><span class="t ${esc(String(f.type).split('|')[0])}">${esc(f.type)}</span></span>`).join('')}
+              <div class="schema-src">${esc(src)}</div></div></div>`
+          : '<div class="lpane faint">No schema available yet: press Try it, then reopen this tab.</div>';
+      });
+    }
+  }
+
+  function prettyJson(t) { try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return String(t || ''); } }
+
+  // Schema fields: publish event > OpenAPI document > inferred from the verified output.
+  async function loadSchema() {
+    const P = S.publish;
+    if (Array.isArray(P.fields) && P.fields.length) return { fields: P.fields, src: 'From the published OpenAPI schema' };
+    if (P.openapi_url && !S.fake) {
+      try {
+        const r = await fetch(P.openapi_url, { mode: 'cors' });
+        if (r.ok) {
+          const f = fieldsFromOpenApi(await r.json());
+          if (f.length) { P.fields = f; return { fields: f, src: 'From ' + P.openapi_url.replace(/^https?:\/\//, '') }; }
+        }
+      } catch { /* CORS or offline: fall back */ }
+    }
+    const sample = S.lastTry || lastGoodOutput();
+    const f = sample ? fieldsFromSample(sample) : [];
+    return { fields: f, src: 'Inferred from the verified output' };
+  }
+
+  function lastGoodOutput() {
+    const r = [...S.runs].reverse().find((x) => x.exit_code === 0 && x.stdout);
+    if (!r) return null;
+    try { return JSON.parse(r.stdout); } catch { return null; }
+  }
+
+  function typeOf(v) {
+    if (v === null) return 'null';
+    if (Array.isArray(v)) return 'array';
+    if (typeof v === 'number') return Number.isInteger(v) ? 'integer' : 'number';
+    return typeof v;
+  }
+
+  function recordOf(v) {
+    if (Array.isArray(v)) return v.find((x) => x && typeof x === 'object' && !Array.isArray(x)) || null;
+    if (v && typeof v === 'object') {
+      const arr = Object.values(v).find((x) => Array.isArray(x) && x.length && typeof x[0] === 'object');
+      return arr ? arr[0] : v;
+    }
+    return null;
+  }
+
+  function fieldsFromSample(v) {
+    const rec = recordOf(v);
+    return rec ? Object.entries(rec).map(([k, x]) => ({ name: k, type: typeOf(x), required: x !== null })) : [];
+  }
+
+  function fieldsFromOpenApi(doc) {
+    const refs = (doc.components && doc.components.schemas) || {};
+    const deref = (sch, depth = 0) => {
+      if (!sch || depth > 8) return sch || {};
+      if (sch.$ref) return deref(refs[sch.$ref.split('/').pop()], depth + 1);
+      if (sch.allOf && sch.allOf.length === 1) return deref(sch.allOf[0], depth + 1);
+      return sch;
+    };
+    let sch = null;
+    for (const [path, ops] of Object.entries(doc.paths || {})) {
+      const op = ops && (ops.get || ops.post);
+      const c = op && op.responses && (op.responses['200'] || op.responses[200]);
+      const js = c && c.content && (c.content['application/json'] || Object.values(c.content)[0]);
+      if (js && js.schema) { sch = js.schema; if (/run/.test(path)) break; }
+    }
+    sch = deref(sch);
+    if (!sch) return [];
+    if (sch.type === 'array' || sch.items) sch = deref(sch.items);
+    const props = sch.properties || {};
+    const keys = Object.keys(props);
+    if (keys.length === 1 && deref(props[keys[0]]).type === 'array') sch = deref(deref(props[keys[0]]).items);
+    const req = new Set(sch.required || []);
+    return Object.entries(sch.properties || {}).map(([k, v]) => {
+      const d = deref(v);
+      const t = Array.isArray(d.type) ? d.type.join('|') : d.type || (d.anyOf ? d.anyOf.map((x) => deref(x).type).filter(Boolean).join('|') : 'any');
+      return { name: k, type: t, required: req.size ? req.has(k) : true };
+    });
+  }
+
+  // "One call instead of a hundred clicks": the agent's first run vs one call to the API.
+  function renderSpeed() {
+    const box = $('speedCard');
+    if (!box || !S.publish) return;
+    const end = S.tEnd || S.publishTs || Date.now() / 1000;
+    const runS = S.t0 ? end - S.t0 : null;
+    const runTxt = runS == null ? '…' : runS >= 60 ? `${Math.floor(runS / 60)}m ${Math.floor(runS % 60)}s` : `${runS.toFixed(1)} s`;
+    if (S.tryMs == null) {
+      box.innerHTML = `<div class="k">One call instead of a hundred clicks</div><div class="v">The agent took <b>${esc(runTxt)}</b> to learn this page once. Send a request to see how long a call takes now.</div>`;
+      return;
+    }
+    const x = runS ? Math.round((runS * 1000) / Math.max(1, S.tryMs)) : null;
+    box.innerHTML = `<div class="k">One call instead of a hundred clicks</div>${x ? `<div class="x">${x.toLocaleString()}× faster</div>` : ''}
+      <div class="v">Agent run <b>${esc(runTxt)}</b> → API call <b>${esc(fmtMs(S.tryMs))}</b>, every time, with no LLM in the loop.</div>`;
+  }
+
+  function onHealth(d) {
+    const chip = $('healthChip');
+    if (chip && S.publish && (!d.api_id || d.api_id === (S.publish.api_id || S.publish.sandbox_id))) {
+      chip.innerHTML = `<span class="chip ${d.ok ? 'ok' : 'accent'}" title="${esc((d.problems || []).join('; '))}"><span class="dot"></span>${d.ok ? 'Healthy' : 'Needs attention'} · checked ${esc(ago(d.last_verified || Date.now() / 1000))}</span>`;
+    }
+    if (catalogRows) {
+      const row = catalogRows.find((r) => r.api_id === d.api_id);
+      if (row) { Object.assign(row, { healthy: d.healthy ?? d.ok, last_verified: d.last_verified ?? Date.now() / 1000, problems: d.problems || [] }); renderCatalog(); }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Catalog view
+  // ---------------------------------------------------------------------------
+
+  let catalogRows = null;
+  let view = 'studio';
+  const catBusy = new Set();
+
+  function setView(v) {
+    view = v;
+    document.body.classList.toggle('view-catalog', v === 'catalog');
+    document.querySelectorAll('[data-view-btn]').forEach((b) => b.classList.toggle('on', b.dataset.viewBtn === v));
+    show('catalog', v === 'catalog');
+    document.querySelectorAll('[data-view-btn]').forEach((b) => { if (b.dataset.viewBtn === v) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    const q = v === 'catalog' ? '?view=catalog' : '';
+    history.replaceState(null, '', location.pathname + q + location.hash);
+    if (v === 'catalog') loadCatalog();
+  }
+
+  async function loadCatalog() {
+    const grid = $('catGrid');
+    if (!catalogRows) grid.innerHTML = [0, 1, 2].map(() => '<div class="card cat"><div class="skel" style="height:14px;width:40%"></div><div class="skel" style="height:26px;width:70%"></div><div class="skel" style="height:14px"></div><div class="skel" style="height:36px"></div></div>').join('');
+    try {
+      const r = await fetch('/api/catalog');
+      if (!r.ok) throw new Error(r.status === 404 ? 'not available on this server yet' : r.statusText);
+      catalogRows = await r.json();
+      renderCatalog();
+    } catch (err) {
+      grid.innerHTML = `<div class="cat-empty empty-center"><div><div class="empty-title">Couldn't load your APIs</div><div class="empty-sub">${esc(err.message === 'Failed to fetch' ? 'The Unclick server is not reachable.' : err.message)}</div><button type="button" class="btn btn-ghost" data-cat-retry>Retry</button></div></div>`;
+    }
+  }
+
+  function refreshCatalogCount() {
+    fetch('/api/catalog').then((r) => (r.ok ? r.json() : null)).then((rows) => {
+      if (!Array.isArray(rows)) return;
+      catalogRows = rows;
+      const c = $('catCount');
+      c.textContent = rows.length;
+      c.hidden = !rows.length;
+      if (view === 'catalog') renderCatalog();
+    }).catch(() => {});
+  }
+
+  function ago(ts) {
+    if (!ts) return '';
+    const t = typeof ts === 'number' ? ts * 1000 : Date.parse(ts);
+    const s = Math.max(0, (Date.now() - t) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  }
+
+  function renderCatalog() {
+    const rows = catalogRows || [];
+    const c = $('catCount');
+    c.textContent = rows.length;
+    c.hidden = !rows.length;
+    const grid = $('catGrid');
+    if (!rows.length) {
+      grid.innerHTML = `<div class="cat-empty empty-center"><div><div class="empty-title">No APIs yet</div><div class="empty-sub">Every API you build shows up here, with health checks and self-heal.</div><button type="button" class="btn btn-primary" data-cat-build>Build your first API</button></div></div>`;
+      return;
+    }
+    grid.innerHTML = rows.map((e, i) => {
+      const busy = catBusy.has(e.api_id);
+      const h = busy ? ['busy', busy === 'heal' ? 'Healing…' : 'Verifying…'] : e.healthy === true ? ['ok', 'Healthy'] : e.healthy === false ? ['bad', 'Needs attention'] : ['', 'Not verified yet'];
+      let host = e.source_url || '';
+      try { host = new URL(e.source_url).host.replace(/^www\./, '') + new URL(e.source_url).pathname.replace(/\/$/, ''); } catch { /* keep */ }
+      const fields = Array.isArray(e.fields) ? e.fields : [];
+      const problems = Array.isArray(e.problems) ? e.problems : [];
+      return `<article class="card cat${e.replaced_by ? ' replaced' : ''}" style="animation-delay:${Math.min(i * 60, 600)}ms">
+        <div class="cat-top"><span class="health ${h[0]}"><span class="dot"></span>${h[1]}</span>
+          ${e.last_verified ? `<span>· verified ${esc(ago(e.last_verified))}</span>` : ''}
+          <span class="grow"></span><span>${esc(ago(e.created_at))}</span></div>
+        <div><div class="cat-name">${esc(e.name || e.api_id)}</div><div class="cat-src">${esc(host)}</div></div>
+        ${e.task ? `<div class="cat-task">${esc(e.task)}</div>` : ''}
+        ${fields.length ? `<div class="fields">${fields.slice(0, 8).map((f) => `<span class="field-chip"><span class="n">${esc(f.name)}</span><span class="t ${esc(String(f.type).split('|')[0])}">${esc(f.type)}</span></span>`).join('')}</div>` : ''}
+        <div class="cat-url"><span title="${esc(e.api_url)}">${esc(e.api_url)}</span><button type="button" class="btn btn-ghost btn-sm" data-cat-copy="${esc(e.api_id)}">${svg(I.copy, 'ico-sm')}Copy</button></div>
+        ${problems.length && e.healthy === false ? `<ul class="cat-problems">${problems.slice(0, 3).map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}
+        ${e.replaced_by ? `<div class="faint" style="font-size:13px">Replaced by <span class="mono">${esc(e.replaced_by)}</span> after a self-heal</div>` : ''}
+        <div class="cat-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-cat-verify="${esc(e.api_id)}" ${busy ? 'disabled' : ''}>${svg(I.check, 'ico-sm')}Verify</button>
+          <button type="button" class="btn ${e.healthy === false ? 'btn-primary' : 'btn-ink'} btn-sm" data-cat-heal="${esc(e.api_id)}" ${busy ? 'disabled' : ''}>${svg(I.bolt, 'ico-sm')}Self-heal</button>
+          <span class="grow"></span>
+          ${e.mcp_url ? `<button type="button" class="btn btn-ghost btn-sm" data-cat-mcp="${esc(e.api_id)}" title="Copy the MCP endpoint">MCP</button>` : ''}
+          ${e.docs_url ? `<a class="btn btn-ghost btn-sm" href="${esc(e.docs_url)}" target="_blank" rel="noopener">Docs ${svg(I.ext, 'ico-sm')}</a>` : ''}
+        </div>
+      </article>`;
+    }).join('');
+  }
+
+  async function catVerify(id) {
+    catBusy.add(id); renderCatalog();
+    try {
+      const r = await fetch(`/api/apis/${encodeURIComponent(id)}/verify`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail || r.statusText);
+      const row = (catalogRows || []).find((x) => x.api_id === id);
+      if (row) Object.assign(row, { healthy: j.healthy ?? j.ok, last_verified: j.last_verified ?? Date.now() / 1000, problems: j.problems || [] });
+      toast(j.ok ? 'Verified: output still matches the schema' : `Needs attention: ${(j.problems || [])[0] || 'verification failed'}`, 3500, j.ok ? 'ok' : 'bad');
+    } catch (err) { toast('Verify failed: ' + err.message, 4000, 'bad'); }
+    finally { catBusy.delete(id); renderCatalog(); }
+  }
+
+  async function catHeal(id) {
+    catBusy.add(id); renderCatalog();
+    try {
+      const r = await fetch(`/api/apis/${encodeURIComponent(id)}/heal`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail || r.statusText);
+      if (j.run_id) {
+        toast('Self-heal started: re-running the agent', 3000, 'ok');
+        setView('studio');
+        attach(j.run_id, undefined, j.mode ? { mode: j.mode } : undefined);
+        revealStage();
+        return;
+      }
+      toast(j.ok ? 'Healthy: nothing to heal' : 'Heal did not start', 3000, j.ok ? 'ok' : 'bad');
+      refreshCatalogCount();
+    } catch (err) { toast('Self-heal failed: ' + err.message, 4000, 'bad'); }
+    finally { catBusy.delete(id); if (view === 'catalog') renderCatalog(); }
+  }
+
+  function renderSummary() {
+    if (!S.publish) return;
+    const box = $('summary');
+    const end = S.tEnd || Date.now() / 1000;
+    const secs = S.t0 ? Math.floor(end - S.t0) : 0;
+    const time = secs >= 60 ? `${Math.floor(secs / 60)}<small>m</small> ${secs % 60}<small>s</small>` : `${secs}<small>s</small>`;
+    const fixes = Math.max(0, S.codes.length - 1);
+    const stats = [
+      [time, S.done ? 'site → paid API' : 'so far', true],
+      [String(S.codes.length), `attempt${S.codes.length === 1 ? '' : 's'}, ${fixes} fix${fixes === 1 ? '' : 'es'}`],
+      [String(S.captures.length), 'JSON calls'],
+      [String(S.sandboxes.size), 'sandboxes'],
+    ];
+    box.innerHTML = stats.map(([v, k, h]) => `<div class="stat${h ? ' hero-stat' : ''}"><div class="v">${v}</div><div class="k">${esc(k)}</div></div>`).join('');
+    box.hidden = false;
   }
 
   async function tryIt() {
     const btn = $('tryBtn');
     btn.disabled = true;
-    $('tryOut').className = 'term text-[12.5px] p-3 text-slate-500';
-    $('tryOut').textContent = 'GET ' + S.publish.api_url + ' …';
+    const out = $('tryOut');
+    out.textContent = 'GET ' + S.publish.api_url + ' …';
     try {
       const r = await fetch('/api/try', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run_id: S.runId, api_url: S.publish.api_url, key: boughtKey() }) });
       const j = await r.json();
+      if (j.key_rejected) { try { localStorage.removeItem('unclick.key'); } catch { /* ignore */ } toast('Stored API key was rejected: used the demo key'); }
       const ok = j.status >= 200 && j.status < 300;
-      $('tryMeta').innerHTML = `<span class="chip ${ok ? 'bg-emerald-500 text-ink-950' : 'bg-red-500 text-white'} font-bold">${esc(j.status || 'ERR')}</span><span class="kbd text-[15px] font-bold text-white">${esc(fmtMs(j.ms))}</span>`;
+      if (ok && j.ms != null) { S.tryMs = j.ms; if (j.json && typeof j.json === 'object') S.lastTry = j.json; renderSpeed(); }
+      $('tryMeta').innerHTML = `<span class="chip ${ok ? 'solid-ok' : 'solid-bad'}">${esc(j.status || 'ERR')}</span><span class="metric"><span class="v">${esc(fmtMs(j.ms))}</span></span>`;
       const body = j.json !== undefined ? j.json : j.error || j.detail;
       const txt = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
-      const out = $('tryOut');
-      out.className = 'term text-[12.5px] p-3 anim-in';
+      out.style.animation = 'none'; void out.offsetWidth; out.style.animation = 'slideUp .3s ease-out both';
       try { out.innerHTML = hljs.highlight(txt, { language: 'json' }).value; } catch { out.textContent = txt; }
     } catch (err) {
-      $('tryOut').textContent = 'Request failed: ' + err.message;
+      out.textContent = 'Request failed: ' + err.message;
     } finally { btn.disabled = false; }
   }
 
   async function wakeTest() {
     const btn = $('wakeBtn');
     btn.disabled = true;
-    $('tryMeta').innerHTML = '<span class="chip bg-sky-500/15 text-sky-300 border-sky-500/30"><span class="blink">●</span> waking…</span>';
+    $('tryMeta').innerHTML = '<span class="chip info pulse"><span class="dot"></span>waking…</span>';
     try {
       const r = await fetch('/api/wake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run_id: S.runId, api_url: S.publish.api_url }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.detail || r.statusText);
-      showWake(j.wake_ms);
+      if (j.local) $('tryMeta').innerHTML = `<span class="metric" title="Local sandbox mode: the API never pauses"><span class="k">local · /health</span><span class="v">${esc(fmtMs(j.wake_ms))}</span></span>`;
+      else showWake(j.wake_ms);
     } catch (err) {
-      $('tryMeta').innerHTML = `<span class="chip bg-red-500/15 text-red-300 border-red-500/30">wake failed</span>`;
-      toast('Wake test failed: ' + err.message);
+      $('tryMeta').innerHTML = '<span class="chip bad">wake failed</span>';
+      toast('Wake test failed: ' + err.message, 4000, 'bad');
     } finally { btn.disabled = false; }
   }
 
   let pollT = null;
   function startStatusPoll() {
     clearInterval(pollT);
-    if (S.fake) return;
+    if (S.fake || S.mode === 'replay') return;
     const id = S.runId;
     pollT = setInterval(() => {
       if (!S || S.runId !== id) { clearInterval(pollT); return; }
@@ -637,40 +1286,47 @@
 
   function showWake(ms) {
     const m = $('tryMeta');
-    if (m) m.innerHTML = `<span class="text-[12px] text-slate-400">paused → awake in</span><span class="kbd text-[20px] font-extrabold text-sky-300">${esc(fmtMs(ms))}</span>`;
+    if (m) m.innerHTML = `<span class="metric"><span class="k">paused → awake</span><span class="v" style="color:rgb(var(--info))">${esc(fmtMs(ms))}</span></span>`;
   }
 
   function onBilling(d, ev) {
+    revealCard('payCard');
     const B = S.billing;
     if (d.calls_remaining != null) {
       B.calls = d.calls_remaining;
       const el = $('callsLeft');
       el.textContent = B.calls;
-      el.classList.remove('anim-in'); void el.offsetWidth; el.classList.add('anim-in');
+      el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     }
     if (d.api_key) B.apiKey = d.api_key;
     if (d.event === 'paid' && d.api_key) { try { localStorage.setItem('unclick.key', d.api_key); } catch { /* ignore */ } }
     const cents = d.amount_cents != null ? `$${(d.amount_cents / 100).toFixed(2)}` : '';
-    if (d.event === 'call_charged') {
-      B.last = `<div class="flex items-center gap-2"><span class="chip bg-stripe/20 text-stripe-light border-stripe/40">usage</span><span class="text-white font-semibold">1 API call charged</span><div class="flex-1"></div><span class="kbd text-white">${esc(cents)}</span><span class="kbd text-slate-500 text-[11px]">${clock(ev.ts)}</span></div>`;
+    const when = `<span class="when">${clock(ev.ts)}</span>`;
+    if (d.event === 'call_charged' && d.metered === false) {
+      B.last = `<span class="chip warn">demo key</span><span>1 call used</span><span class="amt faint">unmetered</span>${when}`;
+    } else if (d.event === 'call_charged' && d.calls_remaining === 0 && !d.amount_cents) {
+      B.last = `<span class="chip bad">402</span><span>Out of calls</span><span class="amt"></span>${when}`;
+    } else if (d.event === 'call_charged') {
+      B.last = `<span class="chip stripe">usage</span><span>1 call charged</span><span class="amt">${esc(cents)}</span>${when}`;
     } else if (d.event === 'paid') {
-      B.last = `<div class="flex items-center gap-2"><span class="chip bg-emerald-500/20 text-emerald-300 border-emerald-500/40">paid</span><span class="text-white font-semibold">Checkout complete</span><div class="flex-1"></div><span class="kbd text-white">${esc(cents)}</span><span class="kbd text-slate-500 text-[11px]">${clock(ev.ts)}</span></div>
-        ${d.api_key ? `<div class="kbd text-[11.5px] text-slate-400 mt-1">API key ${esc(String(d.api_key).slice(0, 10))}…</div>` : ''}`;
+      B.last = `<span class="chip ok">paid</span><span>Checkout complete</span><span class="amt">${esc(cents)}</span>${when}`;
     } else if (d.event === 'checkout_created') {
-      B.last = `<div class="flex items-center gap-2"><span class="chip bg-ink-700 text-slate-300">checkout</span><span class="text-slate-300">Checkout session created</span><div class="flex-1"></div><span class="kbd text-slate-500 text-[11px]">${clock(ev.ts)}</span></div>`;
+      B.last = `<span class="chip">checkout</span><span>Session created</span><span class="amt"></span>${when}`;
     }
     if (B.last) {
       const lc = $('lastCharge');
       lc.innerHTML = B.last;
-      lc.className = 'anim-in rounded-xl bg-ink-800/70 border border-stripe/30 px-3 py-2 text-[13px]';
+      lc.className = 'charge'; void lc.offsetWidth; lc.className = 'charge has';
     }
-    B.feed.unshift(`<div class="flex gap-2 anim-in"><span class="kbd text-slate-600">${clock(ev.ts)}</span><span class="truncate">${esc(ev.message)}</span></div>`);
-    B.feed = B.feed.slice(0, 4);
+    B.feed.unshift(`<div><span class="when">${clock(ev.ts)}</span><span class="m">${esc(ev.message)}</span></div>`);
+    B.feed = B.feed.slice(0, 2);
+    renderChargeNote();
     $('billingFeed').innerHTML = B.feed.join('');
   }
 
   async function buy() {
     const btn = $('buyBtn');
+    if (stripeOff()) { toast('Stripe test mode is not configured: demo key active'); return; }
     btn.disabled = true;
     try {
       const fakeBuy = (S && S.fake) || !config.billing;
@@ -682,44 +1338,92 @@
       if (!r.ok) throw new Error(j.detail || r.statusText);
       const url = j.checkout_url || j.url;
       if (url) { location.href = url; return; }
-      toast(j.fake ? 'Test purchase simulated: +100 calls' : 'Checkout created');
+      toast(j.fake ? 'Test purchase simulated: +100 calls' : 'Checkout created', 2600, 'ok');
     } catch (err) {
-      toast('Checkout failed: ' + err.message);
-    } finally { btn.disabled = false; }
+      toast('Checkout failed: ' + err.message, 4000, 'bad');
+    } finally { renderBillingMode(); if (!stripeOff()) btn.disabled = false; }
   }
 
   // ---------------------------------------------------------------------------
   // Timeline + done
   // ---------------------------------------------------------------------------
 
-  const KIND_COLOR = {
-    status: 'brand', sandbox: 'brand', live_view: 'sky', egress: 'amber', browser_action: 'sky', capture: 'sky',
-    endpoint: 'brand', code: 'violet', run: 'violet', verify: 'violet', publish: 'brand', billing: 'indigo',
-    pause: 'sky', log: 'slate', error: 'red', done: 'brand',
-  };
-
+  const HL_KINDS = new Set(['status', 'endpoint', 'publish', 'done']);
   function addLog(ev) {
     const t = S.t0 != null ? ev.ts - S.t0 : 0;
-    const c = KIND_COLOR[ev.kind] || 'slate';
-    const warn = ev.kind === 'error' || (ev.kind === 'log' && ev.data && ev.data.level === 'warn');
+    const warn = ev.kind === 'log' && ev.data && ev.data.level === 'warn';
     const el = document.createElement('div');
-    el.className = 'flex items-start gap-2 px-2 py-1 rounded-md text-[12.5px] hover:bg-ink-800/60';
-    el.innerHTML = `<span class="kbd text-slate-600 tabular-nums w-12 shrink-0 text-right">+${t.toFixed(1)}s</span>
-      <span class="chip bg-${c}-500/10 text-${c}-300 border-${c}-500/25 kbd w-[104px] justify-center shrink-0">${esc(ev.kind)}</span>
-      <span class="${warn ? 'text-amber-200' : 'text-slate-300'} min-w-0 break-words">${esc(ev.message)}</span>`;
+    el.className = 'logrow' + (ev.kind === 'error' ? ' err' : warn ? ' warn' : HL_KINDS.has(ev.kind) ? ' hl' : '');
+    el.innerHTML = `<span class="t">+${t.toFixed(1)}s</span><span class="k">${esc(ev.kind)}</span><span class="msg">${esc(ev.message)}</span>`;
     const pane = $('pane-log');
-    const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 40;
+    const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 60;
     pane.appendChild(el);
     if (atBottom) pane.scrollTop = pane.scrollHeight;
   }
 
   function onDone(d, ev) {
+    const top = $('ticker').firstElementChild;
+    if (top && top.classList.contains('now')) settle(top);
+    $('activityTitle').textContent = S.failed ? 'Unclick stopped' : 'Unclick finished';
     S.done = true;
     S.tEnd = ev.ts;  // stays right when a finished run is replayed
-    $('runDot').className = 'w-2 h-2 rounded-full ' + (S.failed ? 'bg-red-500' : 'bg-brand-400');
+    $('runDot').className = 'run-dot ' + (S.failed ? 'bad' : 'ok');
     renderStepper();
-    $('goBtn').disabled = false;
-    if (!S.failed) toast('✓ ' + (d.summary ? `Done: ${d.summary}` : 'Done'), 4000);
+    renderSummary();
+    renderSpeed();
+    setBusy(false);
+    $('runbarK').textContent = S.failed ? 'Stopped' : S.publish ? 'Live' : 'Finished';
+    if (!S.failed) toast(d.summary ? `Done: ${d.summary}` : 'Done', 4000, 'ok');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Page state: empty (landing) → running → result
+  // ---------------------------------------------------------------------------
+
+  function setState(st) {
+    document.body.classList.remove('state-empty', 'state-running', 'state-result');
+    document.body.classList.add('state-' + st);
+    const on = st !== 'empty';
+    show('runbar', on); show('stepperWrap', on); show('mainContent', on); show('runMeta', on);
+    show('builtH', st === 'result');
+    if (on) {
+      $('runUrl').textContent = $('urlIn').value.trim();
+      $('runTask').textContent = $('taskIn').value.trim();
+      $('runbarK').textContent = st === 'result' ? 'Live' : 'Building';
+    }
+    updateRail();
+  }
+
+  function revealCard(id) {
+    const c = $(id);
+    if (c && c.hidden) { c.hidden = false; updateRail(); }
+  }
+  function updateRail() {
+    const rail = document.querySelector('.rail');
+    rail.classList.toggle('empty', ![...rail.children].some((c) => !c.hidden));
+  }
+  function revealAgent() {
+    const a = $('agentCard');
+    if (!a.hidden) return;
+    a.hidden = false;
+    // Bring the code into view if it landed below the fold.
+    setTimeout(() => {
+      const r = a.getBoundingClientRect();
+      if (r.top > innerHeight - 120 && !document.body.classList.contains('state-result')) a.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 400);
+  }
+
+  function buildAnother() {
+    if (es) { es.close(); es = null; }
+    clearInterval(timerInt);
+    S = fresh();
+    resetUI();
+    history.replaceState(null, '', location.pathname + (view === 'catalog' ? '?view=catalog' : ''));
+    setView('studio');
+    setState('empty');
+    setBusy(false);
+    window.scrollTo({ top: 0 });
+    setTimeout(() => $('urlIn').focus(), 50);
   }
 
   // ---------------------------------------------------------------------------
@@ -728,66 +1432,73 @@
 
   function showRTab(name) {
     document.querySelectorAll('[data-rtab]').forEach((b) => b.classList.toggle('on', b.dataset.rtab === name));
-    document.querySelectorAll('.rpane').forEach((p) => {
-      const on = p.id === 'pane-' + name;
-      p.classList.toggle('hidden', !on);
-      p.classList.toggle('flex', on && name !== 'log');
-    });
+    document.querySelectorAll('.pane').forEach((p) => { p.hidden = p.id !== 'pane-' + name; });
     if (name === 'log') { const pl = $('pane-log'); pl.scrollTop = pl.scrollHeight; }
   }
 
   function setFollow(on) {
     follow = on;
-    $('followBtn').className = 'chip mr-1 ' + (on ? 'bg-brand-500/10 border-brand-500/30 text-brand-300' : 'bg-ink-800 border-ink-600 text-slate-500');
+    $('followBtn').classList.toggle('on', on);
   }
 
   const LOOP = [
-    ['✍️', 'Write', 'client.py from the captured calls'],
-    ['▶', 'Run', 'in a CreateOS sandbox'],
-    ['🔎', 'Read', 'the traceback, diff vs the screen'],
-    ['🔧', 'Fix', 'and rerun until it matches'],
+    ['Write', 'client.py from the captured calls'],
+    ['Run', 'it in a CreateOS sandbox'],
+    ['Read', 'the traceback, diff vs the screen'],
+    ['Fix', 'and rerun until it matches'],
   ];
-  const CODE_EMPTY = `<div class="h-full grid place-items-center font-sans"><div class="text-center">
-    <div class="text-[12px] uppercase tracking-[.14em] text-slate-500 font-bold mb-4">The agent's code loop</div>
-    <div class="flex items-center gap-2">${LOOP.map(([i, t, d], k) => `
-      <div class="w-[150px] rounded-xl border border-ink-700 bg-ink-800/50 px-3 py-3">
-        <div class="text-xl">${i}</div><div class="text-white font-semibold mt-1">${t}</div><div class="text-[12px] text-slate-500 mt-0.5 leading-snug">${d}</div>
-      </div>${k < LOOP.length - 1 ? '<div class="text-slate-600">→</div>' : ''}`).join('')}
-    </div>
-    <div class="text-[12.5px] text-slate-600 mt-4">client.py appears here, with a diff for every fix</div>
+  const CODE_EMPTY = `<div class="empty-center"><div>
+    <div class="loop-k">The agent's code loop</div>
+    <div class="loop">${LOOP.map(([t, d], k) => `<div class="loop-step"><div class="n">0${k + 1}</div><div class="t">${t}</div><div class="d">${d}</div></div>${k < LOOP.length - 1 ? `<span class="loop-arrow">${svg('<path d="M5 12h14M13 6l6 6-6 6"/>', 'ico-sm')}</span>` : ''}`).join('')}</div>
+    <div class="empty-sub" style="margin-top:14px">client.py appears here, with a diff for every fix</div>
   </div></div>`;
+
+  const empty = (icon, title, sub) => `<div class="empty-center"><div><div class="empty-icon">${svg(icon)}</div><div class="empty-title">${title}</div><div class="empty-sub">${sub}</div></div></div>`;
 
   function resetUI() {
     $('ticker').innerHTML = '';
+    show('activity', false);
+    $('activityTitle').textContent = 'Unclick working…';
+    $('activityPhase').textContent = '';
     $('liveFrame').src = 'about:blank';
-    $('liveDot').classList.add('hidden');
-    $('popOut').classList.add('hidden');
-    $('deskLabel').textContent = 'DESKTOP';
+    show('popOut', false);
+    show('deskId', false);
     $('shotImg').removeAttribute('src');
-    $('capList').innerHTML = '<div class="text-slate-600 text-sm" id="capEmpty">Waiting for network traffic…</div>';
+    $('capList').innerHTML = empty(I.net, 'Listening to the network', 'JSON responses Chrome receives show up here');
     $('capCount').textContent = '0';
-    $('endpointBox').classList.add('hidden');
-    $('netPanel').classList.remove('hidden');
-    $('apiCard').classList.add('hidden');
-    $('apiCard').innerHTML = '';
-    $('egressHosts').innerHTML = '<div class="text-slate-600 text-sm">Not set yet</div>';
-    $('egressReason').innerHTML = '';
-    $('sbList').innerHTML = '<div class="text-slate-600 text-sm">No sandboxes yet</div>';
-    $('sbCount').textContent = '0';
-    $('forkBox').classList.add('hidden');
-    $('pauseBox').classList.add('hidden');
+    show('endpointBox', false);
+    show('netPanel', true);
+    show('summary', false);
+    ['sbCard', 'egCard', 'payCard', 'agentCard', 'apiPage'].forEach((id) => show(id, false));
+    $('apiPage').innerHTML = '';
+    $('capList').innerHTML = '<div class="skel skel-row"></div><div class="skel skel-row" style="width:80%"></div><div class="skel skel-row" style="width:65%"></div>';
+    $('stepPill').textContent = 'Starting…';
+    updateRail();
+    $('egressHosts').innerHTML = '<span class="empty">Locked to the target site when the run starts</span>';
+    $('egressReason').textContent = '';
+    $('egressMode').textContent = 'not set';
+    $('egressMode').className = 'chip';
+    $('sbList').innerHTML = '<div class="empty">Desktop, runner and API sandboxes appear here as the agent boots them</div>';
+    $('sbCount').textContent = '0 active';
+    $('sbCount').className = 'chip';
+    show('forkBox', false);
+    show('pauseBox', false);
     $('codeView').innerHTML = CODE_EMPTY;
     $('attemptPills').innerHTML = '';
     $('codeMeta').innerHTML = '';
-    ['codeCount', 'runCount', 'verifyCount'].forEach((id) => { $(id).textContent = '0'; });
-    $('pane-runs').innerHTML = '<div class="text-slate-600 text-sm">Sandbox runs appear here with stdout, stderr and exit codes</div>';
-    $('pane-verify').innerHTML = '<div class="text-slate-600 text-sm">Output is checked against what Chrome showed</div>';
+    ['runCount', 'verifyCount'].forEach((id) => { $(id).textContent = '0'; });
+    $('pane-runs').innerHTML = empty(I.term, 'No runs yet', 'Each attempt runs in a sandbox: stdout, stderr, exit code');
+    $('pane-verify').innerHTML = empty(I.check, 'Nothing to verify yet', 'Output is checked against what Chrome showed');
     $('pane-log').innerHTML = '';
     $('callsLeft').textContent = '—';
-    $('lastCharge').className = 'rounded-xl bg-ink-800/70 border border-ink-700 px-3 py-2 text-[13px] text-slate-500';
+    $('lastCharge').className = 'charge';
     $('lastCharge').textContent = 'No charges yet';
     $('billingFeed').innerHTML = '';
     $('timer').textContent = '00:00';
+    $('runDot').className = 'run-dot';
+    renderModeBadge();
+    renderRoles();
+    renderBillingMode();
     showRTab('log');
     setFollow(true);
     renderDesk();
@@ -796,25 +1507,63 @@
   }
 
   let toastT;
-  function toast(msg, ms = 2600) {
+  function toast(msg, ms = 2600, kind = '') {
     const t = $('toast');
-    t.textContent = msg;
-    t.classList.remove('hidden');
+    const icon = kind === 'ok' ? `<span style="color:rgb(var(--ok))">${svg(I.check)}</span>` : kind === 'bad' ? `<span style="color:rgb(var(--bad))">${svg(I.x)}</span>` : '';
+    t.innerHTML = icon + `<span>${esc(msg)}</span>`;
+    t.hidden = false;
+    t.style.animation = 'none'; void t.offsetWidth; t.style.animation = '';
     clearTimeout(toastT);
-    toastT = setTimeout(() => t.classList.add('hidden'), ms);
+    toastT = setTimeout(() => { t.hidden = true; }, ms);
   }
 
   async function copy(text, btn) {
     try { await navigator.clipboard.writeText(text); } catch {
       const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
     }
-    const old = btn.textContent; btn.textContent = 'Copied ✓';
-    setTimeout(() => { btn.textContent = old; }, 1200);
+    const old = btn.innerHTML; btn.innerHTML = `${svg(I.check, 'ico-sm')}Copied`;
+    setTimeout(() => { btn.innerHTML = old; }, 1200);
+  }
+
+  async function startReplay(name, speed) {
+    try {
+      const r = await fetch('/api/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ replay: name, speed: speed ? Number(speed) : undefined }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || r.statusText);
+      attach(j.run_id, j.fake, j);
+    } catch (err) { toast('Replay failed: ' + err.message, 5000, 'bad'); }
   }
 
   // Wire up
+  const qs0 = new URLSearchParams(location.search);
   $('runForm').addEventListener('submit', startRun);
   $('buyBtn').addEventListener('click', buy);
+  document.querySelectorAll('[data-view-btn]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.viewBtn)));
+  document.querySelectorAll('.example').forEach((b) => b.addEventListener('click', () => {
+    $('urlIn').value = b.dataset.url;
+    $('taskIn').value = b.dataset.task;
+    $('goBtn').focus();
+  }));
+  $('newBtn').addEventListener('click', buildAnother);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!$('toast').hidden) { $('toast').hidden = true; return; }
+    if (view === 'catalog') setView('studio');
+  });
+  $('catRefresh').addEventListener('click', loadCatalog);
+  $('catGrid').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.hasAttribute('data-cat-retry')) { loadCatalog(); return; }
+    if (b.hasAttribute('data-cat-build')) { buildAnother(); return; }
+    const row = (id) => (catalogRows || []).find((x) => x.api_id === id) || {};
+    if (b.dataset.catVerify) catVerify(b.dataset.catVerify);
+    else if (b.dataset.catHeal) catHeal(b.dataset.catHeal);
+    else if (b.dataset.catCopy) copy(row(b.dataset.catCopy).api_url || '', b);
+    else if (b.dataset.catMcp) copy(row(b.dataset.catMcp).mcp_url || '', b);
+  });
+  refreshCatalogCount();
+  if (qs0.get('view') === 'catalog') setView('catalog');
   $('followBtn').addEventListener('click', () => setFollow(!follow));
   document.querySelectorAll('[data-rtab]').forEach((b) => b.addEventListener('click', () => { setFollow(false); showRTab(b.dataset.rtab); }));
   $('attemptPills').addEventListener('click', (e) => {
@@ -832,20 +1581,26 @@
 
   S = fresh();
   resetUI();
+  const qs = new URLSearchParams(location.search);
   fetch('/api/config').then((r) => r.json()).then((c) => {
     config = c;
-    if (c.fake || !c.pipeline) { const b = $('modeBadge'); b.textContent = c.fake ? 'FAKE PIPELINE' : 'NO PIPELINE · FAKE'; b.classList.remove('hidden'); }
+    renderModeBadge();
+    renderRoles();
+    renderBillingMode();
+    if (c.billing) {
+      fetch('/api/billing/config').then((r) => r.json()).then((b) => { billingCfg = b; renderBillingMode(); }).catch(() => {});
+    }
   }).catch(() => {});
-  const qs = new URLSearchParams(location.search);
   const apiIdParam = qs.get('api_id') || qs.get('buy') || '';
   const keyM = location.hash.match(/unclick_key=([^&]+)/);
   if (keyM) { try { localStorage.setItem('unclick.key', decodeURIComponent(keyM[1])); } catch { /* ignore */ } }
   const m = location.hash.match(/run=([\w-]+)/);
   let last = null;
   try { last = localStorage.getItem('unclick.lastRun'); } catch { /* ignore */ }
-  if (m) attach(m[1]);
+  if (qs.has('replay')) startReplay(qs.get('replay'), qs.get('speed'));
+  else if (m) attach(m[1]);
   else if ((qs.has('paid') || qs.has('canceled')) && last) attach(last);
-  if (qs.has('paid')) setTimeout(() => toast('✓ Stripe test payment complete: API key issued', 4500), 600);
+  if (qs.has('paid')) setTimeout(() => toast('Stripe test payment complete: API key issued', 4500, 'ok'), 600);
   if (qs.has('canceled')) setTimeout(() => toast('Checkout canceled', 3000), 600);
   if (qs.has('buy')) setTimeout(buy, 400);
 })();

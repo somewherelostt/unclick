@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" role="img" aria-label="Unclick">
+  <!-- Unclick mark: a bold "U" cut by an un-click slash. Single warm-black ink color. -->
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#34d399"/>
-      <stop offset="1" stop-color="#059669"/>
-    </linearGradient>
+    <mask id="cut">
+      <rect width="40" height="40" fill="#fff"/>
+      <path d="M7.5 33.5 33.5 7.5" stroke="#000" stroke-width="7" stroke-linecap="round"/>
+    </mask>
   </defs>
-  <rect width="40" height="40" rx="10" fill="url(#g)"/>
-  <path d="M13 11v10a7 7 0 0 0 14 0V11" stroke="#03140d" stroke-width="3.6" fill="none" stroke-linecap="round"/>
-  <path d="M9 31 31 9" stroke="#03140d" stroke-width="2.6" stroke-linecap="round" opacity=".55"/>
+  <path d="M10 7.5v13.5a10 10 0 0 0 20 0V7.5" fill="none" stroke="#120C08" stroke-width="6" stroke-linecap="round" mask="url(#cut)"/>
+  <path d="M9 32 32 9" stroke="#120C08" stroke-width="2.6" stroke-linecap="round"/>
 </svg>

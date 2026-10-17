@@ -1,0 +1,11 @@
+.env
+.env.*
+.projects/vault
+.projects/state.local.json
+.git
+__pycache__
+*.pyc
+runs/*
+!runs/demo-*.jsonl
+.claude
+.createos.json

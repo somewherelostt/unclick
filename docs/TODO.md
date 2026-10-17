@@ -4,7 +4,7 @@ Times are PT, with IST in brackets. **Submissions lock 5:30 PM PT (6:00 AM IST).
 
 ## 1. Accounts and access (now, everyone on the team)
 - [ ] Luma approval confirmed for the whole team (one person registers, teammates added in the form)
-- [ ] Join Discord: https://discord.gg/nodeops. Turn on notifications for #announcements, since the submission form link drops there before 5:30 PM PT
+- [ ] Join the hackathon Discord (the invite from the Luma confirmation). Turn on notifications for #announcements, since the submission form link drops there before 5:30 PM PT
 - [ ] Create a CreateOS account at https://createos.sh/app and **generate an API key** at https://createos.sh/app/profile (credits are only transferred after you do)
 - [ ] Have a Stripe account (free, no need to activate payments, works outside the US)
 

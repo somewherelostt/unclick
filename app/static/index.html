@@ -1,326 +1,274 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Unclick · any website into an API</title>
+  <meta name="description" content="Paste a website, say what data you want, and Unclick's agent turns it into a verified, paid API." />
   <!-- Branding lives in two files: theme.css (fonts + colors) and logo.svg -->
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="/theme.css" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
-  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
-  <script>
-    // Tailwind color names -> theme.css variables (no literal colors here).
-    const v = (name) => `rgb(var(--${name}) / <alpha-value>)`;
-    const scale = (prefix) => Object.fromEntries([200, 300, 400, 500, 600].map((n) => [n, v(`${prefix}-${n}`)]));
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: { sans: ['var(--font-sans)'], mono: ['var(--font-mono)'] },
-          colors: {
-            brand: { ...scale('brand'), ink: v('brand-ink') },
-            ink: Object.fromEntries([950, 900, 850, 800, 700, 600, 500].map((n) => [n, v(`ink-${n}`)])),
-            slate: scale('muted'),
-            emerald: scale('ok'),
-            red: scale('bad'),
-            amber: scale('warn'),
-            sky: scale('info'),
-            violet: scale('code'),
-            indigo: scale('pay'),
-            stripe: { DEFAULT: v('stripe'), light: v('stripe-light') },
-            white: v('fg'),
-            black: v('overlay'),
-          },
-        },
-      },
-    };
-  </script>
+  <link rel="stylesheet" href="/app.css" />
+  <link rel="stylesheet" href="/layout.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/diff@5.2.0/dist/diff.min.js"></script>
-  <style>
-    /* Colors come only from theme.css: rgb(var(--token) / alpha) */
-    :root { color-scheme: dark; }
-    html, body { height: 100%; background: rgb(var(--ink-950)); }
-    body { font-family: var(--font-sans); font-feature-settings: 'cv11', 'ss01'; }
-    .panel { background: linear-gradient(180deg, rgb(var(--ink-850)) 0%, rgb(var(--ink-825)) 100%); border: 1px solid rgb(var(--ink-700)); border-radius: 14px; }
-    .panel-h { display:flex; align-items:center; gap:.5rem; padding:.6rem .85rem; border-bottom:1px solid rgb(var(--ink-700)); font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:rgb(var(--muted-label)); font-weight:600; }
-    .chip { display:inline-flex; align-items:center; gap:.3rem; padding:.12rem .5rem; border-radius:999px; font-size:.72rem; font-weight:600; border:1px solid transparent; white-space:nowrap; }
-    .scroll-thin::-webkit-scrollbar { width: 8px; height: 8px; }
-    .scroll-thin::-webkit-scrollbar-thumb { background: rgb(var(--ink-600)); border-radius: 8px; }
-    .scroll-thin::-webkit-scrollbar-track { background: transparent; }
-
-    /* Layout focus modes: the stage and workbench trade space as the run progresses */
-    #stage { flex: 0 0 60%; transition: flex-basis .7s cubic-bezier(.2,.8,.2,1); min-height: 0; }
-    #bench { flex: 1 1 0; min-height: 0; }
-    body.focus-code #stage { flex-basis: 34%; }
-    body.focus-live #stage { flex-basis: 52%; }
-
-    #desktop { height: 100%; aspect-ratio: 16 / 9; flex-shrink: 0; max-width: 72%; }
-    body.focus-live #desktop { max-width: 46%; }
-    body.focus-code #ticker > :nth-last-child(n+3), body.focus-live #ticker > :nth-last-child(n+3) { display: none; }
-
-    /* Logo */
-    .logo { width: 40px; height: 40px; border-radius: 12px; box-shadow: 0 0 24px rgb(var(--brand-500) / .35); }
-
-    /* Stepper */
-    .step { display:flex; align-items:center; gap:.55rem; color:rgb(var(--muted-step)); font-weight:600; font-size:.86rem; white-space:nowrap; }
-    .step .dot { width:26px; height:26px; border-radius:999px; display:grid; place-items:center; border:2px solid rgb(var(--ink-600)); font-size:.72rem; background:rgb(var(--ink-900)); transition: all .3s; }
-    .step.done { color:rgb(var(--muted-step-done)); }
-    .step.done .dot { background:rgb(var(--brand-500)); border-color:rgb(var(--brand-500)); color:rgb(var(--brand-ink)); }
-    .step.active { color:rgb(var(--fg)); }
-    .step.active .dot { border-color:rgb(var(--brand-400)); color:rgb(var(--brand-400)); animation: pulse 1.6s infinite; }
-    .step.failed .dot { background:rgb(var(--bad-500)); border-color:rgb(var(--bad-500)); color:rgb(var(--fg)); }
-    .step-line { flex:1; height:2px; min-width:14px; background:rgb(var(--ink-700)); border-radius:2px; position:relative; overflow:hidden; }
-    .step-line.done { background:rgb(var(--brand-500)); }
-    .step-line.active::after { content:''; position:absolute; inset:0; background:linear-gradient(90deg, transparent, rgb(var(--brand-400)), transparent); animation: sweep 1.4s infinite; }
-    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 4px rgb(var(--brand-400) / .15), 0 0 14px rgb(var(--brand-400) / .35);} 50% { box-shadow: 0 0 0 7px rgb(var(--brand-400) / .08), 0 0 26px rgb(var(--brand-400) / .6);} }
-    @keyframes sweep { from { transform: translateX(-100%);} to { transform: translateX(100%);} }
-
-    /* Animations */
-    @keyframes slideIn { from { opacity:0; transform: translateY(8px) scale(.98);} to { opacity:1; transform:none;} }
-    @keyframes glowBrand { 0% { background: rgb(var(--brand-500) / .45); box-shadow: 0 0 0 1px rgb(var(--brand-400)), 0 0 24px rgb(var(--brand-400) / .6);} 100% { background: rgb(var(--brand-500) / .10); box-shadow: 0 0 0 1px rgb(var(--brand-400) / .35);} }
-    @keyframes flashRed { 0% { background: rgb(var(--bad-500) / .35);} 100% { background: transparent;} }
-    .anim-in { animation: slideIn .35s ease-out both; }
-    .host-new { animation: glowBrand 2.4s ease-out both; }
-    .blink { animation: blink 1s steps(2) infinite; }
-    @keyframes blink { 50% { opacity: .2; } }
-    .live-dot { width:9px; height:9px; border-radius:999px; background:rgb(var(--bad-500)); box-shadow:0 0 10px rgb(var(--bad-500)); animation: blink 1.2s infinite; }
-
-    /* Code / diff */
-    .code-wrap { font-family: var(--font-mono); font-size: 13.5px; line-height: 1.6; }
-    .code-line { display:flex; white-space:pre; }
-    .code-line .ln { width: 3.2em; flex-shrink:0; text-align:right; padding-right:.9em; color:rgb(var(--muted-lineno)); user-select:none; }
-    .code-line .gut { width: 1.4em; flex-shrink:0; text-align:center; user-select:none; font-weight:700; }
-    .code-line .src { flex:1; padding-right:1em; }
-    .code-line.add { background: rgb(var(--ok-500) / .14); }
-    .code-line.add .gut, .code-line.add .ln { color:rgb(var(--ok-400)); }
-    .code-line.del { background: rgb(var(--bad-500) / .13); }
-    .code-line.del .gut { color:rgb(var(--bad-400)); }
-    .code-line.del .src { opacity:.75; text-decoration: line-through; text-decoration-color: rgb(var(--bad-400) / .5); }
-    .hljs { background: transparent !important; padding: 0 !important; }
-
-    .tab { padding:.35rem .75rem; border-radius:8px; font-size:.8rem; font-weight:600; color:rgb(var(--muted-tab)); display:inline-flex; align-items:center; gap:.4rem; }
-    .tab:hover { color:rgb(var(--muted-300)); background:rgb(var(--ink-800)); }
-    .tab.on { color:rgb(var(--fg)); background:rgb(var(--ink-700)); }
-    .badge { min-width:1.3rem; padding:0 .35rem; height:1.2rem; border-radius:999px; font-size:.68rem; display:inline-grid; place-items:center; background:rgb(var(--ink-600)); color:rgb(var(--muted-300)); }
-
-    .ticker-item { animation: slideIn .35s ease-out both; backdrop-filter: blur(10px); }
-    .term { font-family: var(--font-mono); font-size:12.5px; line-height:1.55; white-space:pre-wrap; word-break:break-word; }
-    .kbd { font-family: var(--font-mono); }
-    .grid-bg { background-image: radial-gradient(rgb(var(--grid-dot) / .18) 1px, transparent 1px); background-size: 18px 18px; }
-    button:disabled { opacity:.5; cursor:not-allowed; }
-    .fork-path { stroke: rgb(var(--brand-400)); stroke-dasharray: 6 6; animation: dash 1s linear infinite; }
-    .fork-head { stroke: rgb(var(--brand-400)); }
-    @keyframes dash { to { stroke-dashoffset: -12; } }
-    .api-glow { box-shadow: 0 0 0 1px rgb(var(--brand-400) / .35), 0 20px 60px -20px rgb(var(--brand-500) / .45); }
-    .glow-brand { box-shadow: 0 8px 30px -8px rgb(var(--brand-500) / .7); }
-    .glow-stripe { box-shadow: 0 8px 30px -10px rgb(var(--stripe) / .9); }
-  </style>
 </head>
-<body class="text-slate-200 font-sans antialiased overflow-hidden">
-<div id="app" class="h-screen flex flex-col gap-3 p-3">
+<body class="state-empty view-studio">
+<a class="skip" href="#mainContent">Skip to content</a>
+<div class="app" id="app">
 
-  <!-- Header + command bar -->
-  <header class="flex items-center gap-5 shrink-0">
-    <div class="flex items-center gap-3 shrink-0">
-      <img src="/logo.svg" alt="Unclick" class="logo" />
-      <div class="leading-tight">
-        <div class="text-[22px] font-extrabold tracking-tight text-white">Unclick</div>
-        <div class="text-[13px] text-slate-400 -mt-0.5">Unclick any website into an API</div>
-      </div>
+  <!-- Floating pill nav -->
+  <header class="topbar">
+    <div class="pillbar">
+      <a class="pill-nav brand" href="/" aria-label="Unclick home"><img src="/logo.svg" alt="" class="brand-logo" /><span class="brand-name">Unclick</span></a>
+      <button type="button" class="pill-nav view-btn on" data-view-btn="studio" aria-current="page">Studio</button>
+      <button type="button" class="pill-nav view-btn" data-view-btn="catalog">My APIs <span id="catCount" class="count" hidden>0</span></button>
     </div>
-
-    <form id="runForm" class="flex-1 flex items-center gap-2 min-w-0">
-      <div class="flex items-center gap-2 bg-ink-850 border border-ink-700 rounded-xl px-3 h-11 w-[34%] min-w-[220px] focus-within:border-brand-500/60">
-        <svg class="w-4 h-4 text-slate-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
-        <input id="urlIn" class="bg-transparent outline-none w-full text-[15px] font-medium text-white placeholder-slate-600" value="https://projects.dev/leaderboard" spellcheck="false" />
-      </div>
-      <div class="flex items-center gap-2 bg-ink-850 border border-ink-700 rounded-xl px-3 h-11 flex-1 min-w-0 focus-within:border-brand-500/60">
-        <svg class="w-4 h-4 text-slate-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
-        <input id="taskIn" class="bg-transparent outline-none w-full text-[15px] text-white placeholder-slate-600" value="Get the top projects with name, votes and URL" spellcheck="false" />
-      </div>
-      <button id="goBtn" type="submit" class="h-11 px-5 rounded-xl bg-brand-500 hover:bg-brand-400 text-brand-ink font-bold text-[15px] flex items-center gap-2 glow-brand transition shrink-0">
-        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>
-        <span>Unclick it</span>
-      </button>
-    </form>
-
-    <div class="flex items-center gap-3 shrink-0">
-      <div id="modeBadge" class="chip bg-ink-800 border-ink-600 text-slate-400 hidden">FAKE</div>
-      <div class="flex items-center gap-2 bg-ink-850 border border-ink-700 rounded-xl px-3 h-11">
-        <div id="runDot" class="w-2 h-2 rounded-full bg-slate-600"></div>
-        <div class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Run</div>
-        <div id="runId" class="kbd text-[13px] text-slate-300">—</div>
-        <div class="w-px h-5 bg-ink-600 mx-1"></div>
-        <div id="timer" class="kbd text-[17px] font-bold text-white tabular-nums">00:00</div>
+    <div class="pillbar topbar-right">
+      <span id="modeBadge" class="pill-nav mode-badge" hidden></span>
+      <div class="pill-nav runmeta" id="runMeta" title="Current run" hidden>
+        <span id="runDot" class="run-dot"></span>
+        <span class="lbl-run">Run</span>
+        <span id="runId" class="mono run-id">—</span>
+        <span class="sep"></span>
+        <span id="timer" class="timer mono">00:00</span>
       </div>
     </div>
   </header>
 
-  <!-- Stepper -->
-  <nav id="stepper" class="panel shrink-0 flex items-center gap-3 px-5 h-12"></nav>
+  <!-- ============================== STUDIO ============================== -->
+  <div id="studio">
 
-  <!-- Main -->
-  <main class="flex-1 min-h-0 flex gap-3">
-    <!-- Left: stage + workbench -->
-    <section class="flex-1 min-w-0 flex flex-col gap-3">
-      <div id="stage" class="flex gap-3">
-        <!-- Desktop -->
-        <div id="desktop" class="panel relative overflow-hidden grid-bg">
-          <div class="absolute top-0 inset-x-0 z-20 flex items-center gap-2 px-3 py-2 bg-gradient-to-b from-black/70 to-transparent pointer-events-none">
-            <div class="live-dot hidden" id="liveDot"></div>
-            <div class="text-[12px] font-bold tracking-wider text-white" id="deskLabel">DESKTOP</div>
-            <div class="chip bg-black/50 border-white/10 text-slate-300 kbd" id="deskId">desktop:1</div>
-            <div class="flex-1"></div>
-            <a id="popOut" target="_blank" rel="noopener" class="hidden pointer-events-auto text-[11px] font-semibold text-slate-300 hover:text-white bg-black/50 border border-white/10 rounded-lg px-2 py-0.5" title="Open the live desktop in a new tab">↗</a>
-            <div class="pointer-events-auto flex bg-black/50 rounded-lg p-0.5 border border-white/10 text-[11px] font-semibold">
-              <button data-view="live" class="dv px-2 py-0.5 rounded-md text-white bg-white/15">Live</button>
-              <button data-view="shot" class="dv px-2 py-0.5 rounded-md text-slate-400">Screenshot</button>
-            </div>
-          </div>
-          <iframe id="liveFrame" class="absolute inset-0 w-full h-full border-0 hidden bg-black" allow="clipboard-read; clipboard-write"></iframe>
-          <img id="shotImg" class="absolute inset-0 w-full h-full object-contain hidden bg-black" alt="desktop screenshot" />
-          <div id="deskEmpty" class="absolute inset-0 grid place-items-center text-center">
-            <div>
-              <div class="mx-auto w-16 h-16 rounded-2xl bg-ink-800 border border-ink-600 grid place-items-center mb-4">
-                <svg class="w-8 h-8 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
-              </div>
-              <div class="text-slate-300 font-semibold">CreateOS desktop sandbox</div>
-              <div class="text-slate-500 text-sm mt-1">Chrome will appear here, live, when the run starts</div>
-            </div>
-          </div>
-          <!-- Browser action ticker -->
-          <div id="ticker" class="absolute left-3 bottom-3 right-3 z-20 flex flex-col items-start gap-1.5 pointer-events-none"></div>
-        </div>
-
-        <!-- Side of stage: network discovery, then API card -->
-        <div id="stageSide" class="flex-1 min-w-0 flex flex-col gap-3">
-          <div id="netPanel" class="panel flex-1 min-h-0 flex flex-col">
-            <div class="panel-h">
-              <svg class="w-4 h-4 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
-              Hidden JSON calls
-              <span class="badge" id="capCount">0</span>
-              <div class="flex-1"></div>
-              <span class="normal-case tracking-normal text-[11px] text-slate-500">Chrome DevTools Protocol recorder</span>
-            </div>
-            <div id="endpointBox" class="hidden mx-3 mt-3 rounded-xl border border-brand-500/40 bg-brand-500/10 p-3 anim-in"></div>
-            <div id="capList" class="flex-1 min-h-0 overflow-auto scroll-thin p-3 flex flex-col gap-1.5">
-              <div class="text-slate-600 text-sm" id="capEmpty">Waiting for network traffic…</div>
-            </div>
-          </div>
-          <div id="apiCard" class="hidden panel api-glow flex-1 min-h-0 flex flex-col overflow-hidden"></div>
-        </div>
+    <!-- Landing (empty state) -->
+    <section id="landing" class="landing" aria-labelledby="heroTitle">
+      <h1 id="heroTitle" class="headline">Unclick any website.<br /><em>Into an API.</em></h1>
+      <p class="lede">Paste a page and say what you want from it. An agent opens it in a real browser, finds the data behind it, writes the code, checks it against the screen and hands you a paid API.</p>
+      <form id="runForm" class="hero-form" autocomplete="off">
+        <label class="field field-url">
+          <span class="sr-only">Website URL</span>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+          <input id="urlIn" type="url" inputmode="url" value="https://projects.dev/leaderboard" spellcheck="false" placeholder="https://any-website.com/page" required />
+        </label>
+        <label class="field field-task">
+          <span class="sr-only">What do you want from this page?</span>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+          <input id="taskIn" value="Get the top projects with name, votes and URL" spellcheck="false" placeholder="What do you want from this page?" required />
+        </label>
+        <button id="goBtn" type="submit" class="btn btn-primary btn-lg">
+          <svg class="ico bolt" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>
+          <svg class="ico spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+          <span id="goLabel">Unclick it</span>
+        </button>
+      </form>
+      <div class="examples" aria-label="Examples">
+        <span class="faint">Try</span>
+        <button type="button" class="example" data-url="https://projects.dev/leaderboard" data-task="Get the top projects with name, votes and URL">projects.dev leaderboard</button>
+        <button type="button" class="example" data-url="https://www.ycombinator.com/companies" data-task="List companies with name, batch, one-liner and website">YC companies directory</button>
+        <button type="button" class="example" data-url="https://news.ycombinator.com/" data-task="Top stories with title, points, comments and link">Hacker News front page</button>
       </div>
-
-      <!-- Workbench -->
-      <div id="bench" class="flex gap-3">
-        <div class="panel flex-[1.35] min-w-0 flex flex-col">
-          <div class="flex items-center gap-1 px-2 py-1.5 border-b border-ink-700">
-            <button class="tab on" data-ltab="code">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 6-6 6 6 6M16 6l6 6-6 6"/></svg>Code <span class="badge" id="codeCount">0</span></button>
-            <div id="attemptPills" class="flex items-center gap-1 ml-2"></div>
-            <div class="flex-1"></div>
-            <div id="codeMeta" class="text-[12px] text-slate-500 pr-2 truncate"></div>
-          </div>
-          <div id="codeView" class="flex-1 min-h-0 overflow-auto scroll-thin code-wrap py-2">
-            
-          </div>
-        </div>
-        <div class="panel flex-1 min-w-0 flex flex-col">
-          <div class="flex items-center gap-1 px-2 py-1.5 border-b border-ink-700">
-            <button class="tab" data-rtab="runs">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 7 5 5-5 5M12 19h7"/></svg>Runs <span class="badge" id="runCount">0</span></button>
-            <button class="tab" data-rtab="verify">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>Verify <span class="badge" id="verifyCount">0</span></button>
-            <button class="tab" data-rtab="log">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Timeline</button>
-            <div class="flex-1"></div>
-            <button id="followBtn" class="chip bg-brand-500/10 border-brand-500/30 text-brand-300 mr-1" title="Auto-switch tabs as the agent works">● Follow</button>
-          </div>
-          <div class="flex-1 min-h-0 relative">
-            <div id="pane-runs" class="rpane absolute inset-0 overflow-auto scroll-thin p-3 flex flex-col gap-3">
-              <div class="text-slate-600 text-sm">Sandbox runs appear here with stdout, stderr and exit codes</div>
-            </div>
-            <div id="pane-verify" class="rpane absolute inset-0 overflow-auto scroll-thin p-3 flex-col gap-3 hidden">
-              <div class="text-slate-600 text-sm">Output is checked against what Chrome showed</div>
-            </div>
-            <div id="pane-log" class="rpane absolute inset-0 overflow-auto scroll-thin p-2 hidden"></div>
-          </div>
-        </div>
-      </div>
+      <ol class="how">
+        <li><span class="how-n">1</span><div><b>Watch the agent</b><span>It opens the page in a cloud browser and finds the data behind it.</span></div></li>
+        <li><span class="how-n">2</span><div><b>It writes and checks the code</b><span>A Python client, re-run and fixed until it matches the screen.</span></div></li>
+        <li><span class="how-n">3</span><div><b>You get an API</b><span>A public URL, MCP tool and per-call billing, paused when idle.</span></div></li>
+      </ol>
+      <dl class="proof">
+        <div><dt>68 s</dt><dd>to build an API</dd></div>
+        <div><dt>~1.3 s</dt><dd>per call</dd></div>
+        <div><dt>0</dt><dd>LLM calls per request</dd></div>
+      </dl>
     </section>
 
-    <!-- Right: sponsor panels -->
-    <aside class="w-[400px] shrink-0 flex flex-col gap-3 min-h-0">
-      <!-- Sandbox -->
-      <div class="panel flex flex-col min-h-0 flex-[1.45]">
-        <div class="panel-h">
-          <svg class="w-4 h-4 text-brand-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>
-          CreateOS Sandboxes
-          <div class="flex-1"></div>
-          <span id="sbCount" class="badge">0</span>
-        </div>
-        <div id="sbScroll" class="p-3 flex flex-col gap-2 min-h-0 overflow-auto scroll-thin flex-1">
-          <div id="sbList" class="flex flex-col gap-2">
-            <div class="text-slate-600 text-sm">No sandboxes yet</div>
-          </div>
-          <div id="forkBox" class="hidden"></div>
-          <div id="pauseBox" class="hidden"></div>
-        </div>
+    <!-- Run bar (running + result) -->
+    <section id="runbar" class="runbar" hidden>
+      <div class="runbar-main">
+        <span class="runbar-k" id="runbarK">Building</span>
+        <span class="runbar-url mono" id="runUrl"></span>
+        <span class="runbar-task" id="runTask"></span>
       </div>
+      <button type="button" id="newBtn" class="btn btn-ghost">Build another</button>
+    </section>
 
-      <!-- Egress -->
-      <div class="panel flex flex-col min-h-0 flex-[0.85]">
-        <div class="panel-h">
-          <svg class="w-4 h-4 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-          Egress allowlist
-          <div class="flex-1"></div>
-          <span id="egressMode" class="chip bg-ink-800 text-slate-500 border-ink-600 normal-case tracking-normal">not set</span>
-        </div>
-        <div class="p-3 flex flex-col gap-2 min-h-0 flex-1 overflow-hidden">
-          <div id="egressHosts" class="flex flex-col gap-1.5"></div>
-          <div id="egressReason" class="text-[12.5px] text-slate-400 leading-snug"></div>
-          <div class="flex-1"></div>
-          <div class="text-[11px] text-slate-500 flex items-center gap-1.5">
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M5 5l14 14"/></svg>
-            Everything else is denied by default
-          </div>
-        </div>
-      </div>
+    <!-- Phase stepper (sticky) -->
+    <nav id="stepperWrap" class="stepper-wrap" aria-label="Progress" hidden>
+      <div id="stepper" class="stepper"></div>
+      <div id="stepPill" class="step-pill" aria-live="polite"></div>
+    </nav>
 
-      <!-- Stripe -->
-      <div class="panel flex flex-col min-h-0 flex-1">
-        <div class="panel-h">
-          <svg class="w-4 h-4 text-stripe-light" viewBox="0 0 24 24" fill="currentColor"><path d="M13.5 9.2c0-.8.7-1.1 1.8-1.1 1.6 0 3.6.5 5.2 1.4V4.6a13.8 13.8 0 0 0-5.2-1C10.9 3.6 8 5.8 8 9.5c0 5.8 7.9 4.8 7.9 7.3 0 .9-.8 1.3-2 1.3-1.7 0-3.9-.7-5.6-1.7v5a14.3 14.3 0 0 0 5.6 1.2c4.4 0 7.4-2.2 7.4-5.9 0-6.2-7.8-5.1-7.8-7.5z" transform="translate(-2 0)"/></svg>
-          Stripe billing
-          <div class="flex-1"></div>
-          <span class="chip bg-amber-500/10 text-amber-300 border-amber-500/30 normal-case tracking-normal">test mode</span>
-        </div>
-        <div class="p-3 flex flex-col gap-3 flex-1 min-h-0">
-          <div class="flex items-end gap-3">
-            <div>
-              <div class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Calls remaining</div>
-              <div id="callsLeft" class="text-[40px] leading-none font-extrabold text-white tabular-nums mt-1">—</div>
+    <main class="main" id="mainContent" hidden>
+      <div class="content">
+
+        <!-- Result: the API page -->
+        <section id="apiPage" class="apipage" hidden aria-label="Your API"></section>
+
+        <h2 id="builtH" class="section-h" hidden>How it was built</h2>
+
+        <!-- Running: stage -->
+        <section class="stage" id="stage" aria-label="Agent at work">
+          <div class="stage-top">
+            <div class="stage-left">
+              <div id="desktop" class="card desk">
+                <div class="band"></div>
+                <div class="screen">
+                  <div class="desk-grid"></div>
+                  <iframe id="liveFrame" hidden allow="clipboard-read; clipboard-write" title="Live view of the agent's browser"></iframe>
+                  <img id="shotImg" hidden alt="Screenshot of the agent's browser" />
+                  <div id="deskEmpty" class="empty-center">
+                    <div>
+                      <div class="skeleton-screen" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+                      <div id="deskEmptyTitle" class="empty-title">Starting a cloud browser…</div>
+                      <div class="empty-sub">The page appears here, live, in a few seconds</div>
+                    </div>
+                  </div>
+                  <div class="desk-bar">
+                    <span class="desk-label glass"><span id="liveDot" class="live-dot" hidden></span><span id="deskLabel">Browser</span><span id="deskId" class="id" hidden></span></span>
+                    <span class="grow"></span>
+                    <a id="popOut" class="icon-btn glass" hidden target="_blank" rel="noopener" title="Open the live view in a new tab" aria-label="Open the live view in a new tab">
+                      <svg class="ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
+                    <div class="seg glass" role="group" aria-label="View">
+                      <button type="button" class="dv on" data-view="live">Live</button>
+                      <button type="button" class="dv" data-view="shot">Screenshot</button>
+                    </div>
+                  </div>
+                  <div id="activity" class="activity" hidden>
+                    <div class="activity-h"><img src="/logo.svg" alt="" /><span class="activity-t" id="activityTitle">Unclick working…</span><span class="grow"></span><span id="activityPhase" class="activity-s"></span></div>
+                    <div id="ticker" class="activity-rows" aria-live="polite"></div>
+                  </div>
+                </div>
+              </div>
+              <div id="summary" class="card summary" hidden></div>
             </div>
-            <div class="flex-1"></div>
-            <button id="buyBtn" class="h-10 px-4 rounded-xl bg-stripe hover:bg-stripe-light text-white font-bold text-sm flex items-center gap-2 glow-stripe transition">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
-              Buy 100 calls
-            </button>
+
+            <div class="side">
+              <div id="netPanel" class="card">
+                <div class="card-h">
+                  <span class="card-title">Data sources</span>
+                  <span id="capCount" class="count">0</span>
+                  <span class="grow"></span>
+                  <span class="faint hide-narrow small">JSON the page loads</span>
+                </div>
+                <div id="endpointBox" hidden></div>
+                <div id="capList" class="caps scroll"></div>
+              </div>
+            </div>
           </div>
-          <div id="lastCharge" class="rounded-xl bg-ink-800/70 border border-ink-700 px-3 py-2 text-[13px] text-slate-500">No charges yet</div>
-          <div id="billingFeed" class="flex flex-col gap-1 text-[12px] text-slate-400 min-h-0 overflow-hidden"></div>
-        </div>
+
+          <div class="card agent" id="agentCard" hidden>
+            <div class="agent-col">
+              <div class="card-h">
+                <span class="card-title">The code</span>
+                <div id="attemptPills" class="pills"></div>
+                <span class="grow"></span>
+                <span id="codeMeta" class="code-meta"></span>
+              </div>
+              <div id="codeView" class="codeview scroll" tabindex="0" aria-label="Generated client code"></div>
+            </div>
+            <div class="agent-col">
+              <div class="card-h">
+                <div class="tabs" role="tablist">
+                  <button type="button" class="tab" role="tab" data-rtab="runs">Runs <span id="runCount" class="count">0</span></button>
+                  <button type="button" class="tab" role="tab" data-rtab="verify">Checks <span id="verifyCount" class="count">0</span></button>
+                  <button type="button" class="tab" role="tab" data-rtab="log">Timeline</button>
+                </div>
+                <span class="grow"></span>
+                <button type="button" id="followBtn" class="follow on" title="Switch tabs automatically as the agent works"><span class="dot"></span>Follow</button>
+              </div>
+              <div class="panes">
+                <div id="pane-runs" class="pane scroll"></div>
+                <div id="pane-verify" class="pane scroll" hidden></div>
+                <div id="pane-log" class="pane log scroll" hidden></div>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
-    </aside>
-  </main>
+
+      <!-- Sponsor rail: each card appears with its first event -->
+      <aside class="rail" aria-label="Infrastructure">
+        <div class="card sb" id="sbCard" hidden>
+          <div class="card-h">
+            <div class="sponsor">
+              <span class="sponsor-mark createos"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg></span>
+              <div><div class="sponsor-k" id="sbKicker">CreateOS</div><div class="sponsor-t" id="sbTitle">Sandboxes</div></div>
+            </div>
+            <span class="grow"></span>
+            <span id="sbCount" class="chip">0 active</span>
+          </div>
+          <div class="card-b">
+            <div id="sbList"></div>
+            <div id="forkBox" hidden></div>
+            <div id="pauseBox" hidden></div>
+          </div>
+        </div>
+
+        <div class="card" id="egCard" hidden>
+          <div class="card-h">
+            <div class="sponsor">
+              <span class="sponsor-mark egress"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+              <div><div class="sponsor-k">CreateOS</div><div class="sponsor-t">Egress allowlist</div></div>
+            </div>
+            <span class="grow"></span>
+            <span id="egressMode" class="chip">not set</span>
+          </div>
+          <div class="card-b">
+            <div id="egressHosts" class="hosts"></div>
+            <div id="egressReason" class="egress-why"></div>
+            <div class="egress-foot">
+              <svg class="ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>
+              Every other host is denied by default
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="payCard" hidden>
+          <div class="card-h">
+            <div class="sponsor">
+              <span class="sponsor-mark stripe"><svg class="ico" viewBox="0 0 24 24" fill="currentColor"><path d="M13.5 9.2c0-.8.7-1.1 1.8-1.1 1.6 0 3.6.5 5.2 1.4V4.6a13.8 13.8 0 0 0-5.2-1C10.9 3.6 8 5.8 8 9.5c0 5.8 7.9 4.8 7.9 7.3 0 .9-.8 1.3-2 1.3-1.7 0-3.9-.7-5.6-1.7v5a14.3 14.3 0 0 0 5.6 1.2c4.4 0 7.4-2.2 7.4-5.9 0-6.2-7.8-5.1-7.8-7.5z" transform="translate(-2 0)"/></svg></span>
+              <div><div class="sponsor-k">Stripe</div><div class="sponsor-t">Billing</div></div>
+            </div>
+            <span class="grow"></span>
+            <span id="stripeModeChip" class="chip stripe">Test mode</span>
+          </div>
+          <div class="card-b">
+            <div class="calls">
+              <div>
+                <div class="calls-k">Calls remaining</div>
+                <div id="callsLeft" class="calls-v">—</div>
+              </div>
+              <div class="price" id="priceBox"></div>
+            </div>
+            <button type="button" id="buyBtn" class="btn btn-ink buy">
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+              <span id="buyLabel">Buy 100 calls</span>
+            </button>
+            <div id="lastCharge" class="charge">No charges yet</div>
+            <div id="billingFeed" class="feed"></div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- ============================== MY APIs ============================== -->
+  <section id="catalog" class="catalog" hidden aria-labelledby="catTitle">
+    <div class="catalog-h">
+      <div>
+        <h2 id="catTitle" class="catalog-title">My APIs</h2>
+        <p class="faint lede-sm">Every API you've built. <b>Verify</b> re-checks the live output against its schema; <b>Self-heal</b> re-runs the agent when a site changes.</p>
+      </div>
+      <span class="grow"></span>
+      <button type="button" id="catRefresh" class="btn btn-ghost">Refresh</button>
+    </div>
+    <div id="catGrid" class="cat-grid" aria-live="polite"></div>
+  </section>
 </div>
 
-<div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden px-4 py-2 rounded-xl bg-ink-700 border border-ink-500 text-sm text-white shadow-xl"></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="/app.js"></script>
 </body>

@@ -375,7 +375,9 @@ class RestSandboxFactory:
     """Implements contracts.SandboxFactory."""
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
-        key = api_key or os.getenv("CREATEOS_SANDBOX_API_KEY") or os.getenv("CREATEOS_API_KEY")
+        # Prefer the key provisioned by Stripe Projects (`stripe projects add createos/project`).
+        key = (api_key or os.getenv("CREATEOS_PROJECT_API_KEY")
+               or os.getenv("CREATEOS_SANDBOX_API_KEY") or os.getenv("CREATEOS_API_KEY"))
         if not key:
             raise SandboxError("CREATEOS_SANDBOX_API_KEY is not set (put it in .env)")
         self.http = _Http(key, base_url or os.getenv("CREATEOS_SANDBOX_BASE_URL") or DEFAULT_BASE_URL)

@@ -652,7 +652,8 @@ def run(url: str, task: str, sink: EventSink, factory: SandboxFactory | None = N
         else:
             import inspect
             params = inspect.signature(publish).parameters
-            extra = {k: v for k, v in (("source_site", url), ("egress_hosts", [ep_host])) if k in params}
+            extra = {k: v for k, v in (("source_site", url), ("egress_hosts", [ep_host]), ("task", task),
+                                       ("sample_output", sample)) if k in params}
             api = publish(runner, code, sink, name=_slug(url, task), **extra)
             published = True
             if api is not None and getattr(api, "sandbox_id", None) == runner.id:

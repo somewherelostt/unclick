@@ -364,7 +364,8 @@ def _disabled_guard() -> None:
 def get_config() -> dict[str, Any]:
     """For the UI: is billing on, what does a pack cost."""
     if not enabled():
-        return {"enabled": False}
+        return {"enabled": False, "mode": "demo_key",
+                "detail": "Stripe test mode not configured: published APIs accept their demo key, unmetered"}
     try:
         cat = ensure_catalog()
     except Exception as e:
@@ -451,9 +452,11 @@ def checkout_success(session_id: str = Query(...)) -> RedirectResponse:
 
 @router.get("/usage")
 def get_usage(key: str | None = Query(None),
-              x_unclick_key: str | None = Header(None, alias=KEY_HEADER)) -> dict[str, int]:
-    _disabled_guard()
+              x_unclick_key: str | None = Header(None, alias=KEY_HEADER)) -> dict[str, Any]:
     k = x_unclick_key or key
+    if not enabled():  # demo-key mode: the published API counts its demo key itself (X-Unclick-Calls-Remaining)
+        return {"enabled": False, "demo_key": bool(k and k.startswith("uk_demo_")),
+                "detail": "Stripe test mode not configured; usage is counted by the API (X-Unclick-Calls-Remaining)"}
     if not k:
         raise HTTPException(400, "pass ?key= or the X-Unclick-Key header")
     return usage(k)

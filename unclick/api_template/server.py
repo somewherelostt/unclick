@@ -8,6 +8,13 @@ Routes (bind 0.0.0.0:8000):
   GET      /health   {"ok": true, ...}. No key, never charged (used for wake timing).
   GET      /         small HTML page: name, source site, example curl.
   GET      /docs     same page (PublishedApi.docs_url points here).
+  GET      /openapi.json   OpenAPI 3.1: /v1/run params from client.run's signature, response = schema.json.
+  GET      /schema.json    JSON Schema inferred at publish from the verified sample output.
+  POST     /mcp      MCP Streamable HTTP (JSON-RPC, stateless): initialize, ping, tools/list, tools/call.
+                     One tool (get_<name>); tools/call is authed + charged exactly like /v1/run.
+                     Key: X-Unclick-Key header or ?key=.
+  GET      /health/verify  re-runs client.run() uncharged, validates against schema.json:
+                     {ok, checked_at, ms, rows, schema, problems[]}. Cached 15 s. No key.
 
 Billing (prepaid credits, Stripe test mode):
   * API keys look like  uk_<stripe customer id>_<32 hex>  e.g. uk_cus_Q1w2e3_ab12...
@@ -249,6 +256,139 @@ except Exception:
     CLIENT_ERROR = traceback.format_exc(limit=3)
 
 
+SCHEMA_PATH = os.path.join(HERE, "schema.json")
+SCHEMA: dict = {}
+try:
+    with open(SCHEMA_PATH, encoding="utf-8") as _f:
+        SCHEMA = json.load(_f)
+except (OSError, ValueError):
+    SCHEMA = {}
+
+_PY_TO_JSON = {bool: "boolean", int: "integer", float: "number", str: "string", list: "array", dict: "object"}
+
+
+def run_params() -> list[dict]:
+    """Named parameters of client.run as [{name, schema, required}] (from annotations / defaults)."""
+    if CLIENT is None or CLIENT_ERROR:
+        return []
+    import inspect
+    out = []
+    try:
+        sig = inspect.signature(CLIENT.run)
+    except (TypeError, ValueError):
+        return []
+    for p in sig.parameters.values():
+        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+            continue
+        ann = p.annotation
+        args = [a for a in getattr(ann, "__args__", None) or () if a is not type(None)]
+        if args and not isinstance(ann, type):  # int | None, Optional[int]
+            ann = args[0]
+        if isinstance(ann, str):  # from __future__ import annotations
+            ann = {"bool": bool, "int": int, "float": float, "str": str, "list": list, "dict": dict}.get(
+                ann.split("|")[0].strip(), inspect.Parameter.empty)
+        if ann is inspect.Parameter.empty and p.default is not inspect.Parameter.empty and p.default is not None:
+            ann = type(p.default)
+        schema: dict = {"type": _PY_TO_JSON.get(ann, "string")}
+        if p.default is not inspect.Parameter.empty and isinstance(p.default, (bool, int, float, str)):
+            schema["default"] = p.default
+        out.append({"name": p.name, "schema": schema, "required": p.default is inspect.Parameter.empty})
+    return out
+
+
+def tool_name() -> str:
+    slug = "".join(c if c.isalnum() else "_" for c in CFG["name"].lower()).strip("_")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return ("get_" + (slug or "data"))[:64]
+
+
+def tool_description() -> str:
+    task = (CFG.get("task") or "").strip()
+    site = CFG.get("source_site") or "a website"
+    desc = f"Live data from {site}"
+    if task:
+        desc += f": {task}"
+    return desc + ". Returns JSON (verified against what the site shows on screen)."
+
+
+def _jtype_ok(v, types) -> bool:
+    types = types if isinstance(types, list) else [types]
+    for t in types:
+        if t == "null" and v is None:
+            return True
+        if t == "boolean" and isinstance(v, bool):
+            return True
+        if t == "integer" and isinstance(v, int) and not isinstance(v, bool):
+            return True
+        if t == "number" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            return True
+        if t == "string" and isinstance(v, str):
+            return True
+        if t == "array" and isinstance(v, list):
+            return True
+        if t == "object" and isinstance(v, dict):
+            return True
+    return False
+
+
+def validate(data, schema: dict, path: str = "$", problems: list | None = None, depth: int = 0) -> list:
+    """Small JSON Schema check: type, required, properties, items (first 50). Returns problem strings."""
+    problems = [] if problems is None else problems
+    if len(problems) >= 20 or depth > 6 or not schema:
+        return problems
+    t = schema.get("type")
+    if t and not _jtype_ok(data, t):
+        problems.append(f"{path}: expected {t}, got {type(data).__name__}")
+        return problems
+    if isinstance(data, dict):
+        for k in schema.get("required", []):
+            if data.get(k) is None:
+                problems.append(f"{path}: missing required field '{k}'")
+        for k, sub in (schema.get("properties") or {}).items():
+            if k in data:
+                validate(data[k], sub, f"{path}.{k}", problems, depth + 1)
+    elif isinstance(data, list) and schema.get("items"):
+        for i, item in enumerate(data[:50]):
+            validate(item, schema["items"], f"{path}[{i}]", problems, depth + 1)
+    return problems
+
+
+MCP_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"]
+VERIFY_TTL = 15  # seconds: /health/verify is free, so repeated hits reuse the last check
+_VERIFY: dict = {"at": 0.0, "result": None}
+_VERIFY_LOCK = threading.Lock()
+
+
+def verify_now() -> dict:
+    """Re-run client.run() (uncharged) and check the output against schema.json."""
+    with _VERIFY_LOCK:
+        if _VERIFY["result"] is not None and time.time() - _VERIFY["at"] < VERIFY_TTL:
+            return dict(_VERIFY["result"], cached=True)
+        problems: list = []
+        rows = None
+        t0 = time.perf_counter()
+        if CLIENT is None or CLIENT_ERROR:
+            problems.append("client.py failed to import: " + CLIENT_ERROR[-300:])
+        else:
+            try:
+                data = CLIENT.run()
+                if data is None or data == [] or data == {}:
+                    problems.append("client.run() returned no data")
+                else:
+                    rows = len(data) if isinstance(data, (list, dict)) else 1
+                    validate(data, SCHEMA, problems=problems)
+            except Exception as e:
+                problems.append(f"client.run() raised {type(e).__name__}: {str(e)[:300]}")
+        result = {
+            "ok": not problems, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "ms": round((time.perf_counter() - t0) * 1000, 1), "rows": rows,
+            "schema": bool(SCHEMA), "problems": problems, "api": CFG["name"], "cached": False,
+        }
+        _VERIFY.update(at=time.time(), result=result)
+        return result
+
+
 def coerce(v: str):
     """Query strings are text; turn obvious numbers/bools into real types."""
     low = v.lower()
@@ -280,7 +420,11 @@ Paid per call (Stripe test mode). This sandbox auto-pauses when idle and wakes o
 <p>Send parameters as query string or JSON body. Header <code>X-Unclick-Key</code> is required.
 Out of credits returns <code>402</code>{buy}.</p>
 <h3>Endpoints</h3><ul><li><code>GET|POST /v1/run</code> run the client and return JSON</li>
-<li><code>GET /health</code> liveness (free)</li></ul></body></html>"""
+<li><code>POST /mcp</code> MCP server (Streamable HTTP) with one tool, <code>{tool}</code>; same key, same price</li>
+<li><a href="/openapi.json"><code>GET /openapi.json</code></a> OpenAPI 3.1 spec with the typed response schema</li>
+<li><a href="/health/verify"><code>GET /health/verify</code></a> re-run the client and validate it against the schema (free)</li>
+<li><code>GET /health</code> liveness (free)</li></ul>
+<h3>Use it from Claude Desktop / Cursor</h3><pre>{mcp}</pre></body></html>"""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -331,18 +475,183 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self._page().encode(), "text/html; charset=utf-8")
         if path == "/v1/run":
             return self._run(url.query)
-        return self._json(404, {"error": "not_found", "routes": ["/v1/run", "/health", "/"]})
+        if path == "/openapi.json":
+            return self._json(200, self._openapi())
+        if path == "/schema.json":
+            return self._json(200, SCHEMA)
+        if path == "/health/verify":
+            return self._json(200, verify_now())
+        if path == "/mcp":
+            return self._mcp(url.query)
+        return self._json(404, {"error": "not_found",
+                                "routes": ["/v1/run", "/mcp", "/openapi.json", "/health", "/health/verify", "/"]})
+
+    def _base_url(self) -> str:
+        host = self.headers.get("Host", "localhost:8000")
+        proto = self.headers.get("X-Forwarded-Proto")
+        scheme = proto or ("http" if host.startswith(("localhost", "127.")) else "https")
+        return f"{scheme}://{host}"
+
+    def _openapi(self) -> dict:
+        params = [{"name": p["name"], "in": "query", "required": p["required"], "schema": p["schema"]}
+                  for p in run_params()]
+        data_schema = SCHEMA or {}
+        ok_schema = {"type": "object", "required": ["data", "meta"], "properties": {
+            "data": data_schema,
+            "meta": {"type": "object", "properties": {
+                "ms": {"type": "number"}, "charged": {"type": "boolean"},
+                "calls_remaining": {"type": "integer"}, "demo_key": {"type": "boolean"},
+                "api": {"type": "string"}}}}}
+        err = {"type": "object", "properties": {"error": {"type": "string"}, "message": {"type": "string"}}}
+
+        def resp(desc: str, schema: dict) -> dict:
+            return {"description": desc, "content": {"application/json": {"schema": schema}}}
+
+        run_op = {
+            "operationId": tool_name(), "summary": tool_description(), "parameters": params,
+            "security": [{"UnclickKey": []}],
+            "responses": {"200": resp("Data from the site (charged 1 call)", ok_schema),
+                          "400": resp("Bad parameters", err), "401": resp("Missing or invalid key", err),
+                          "402": resp("Out of prepaid calls", err), "502": resp("Upstream site failed", err)},
+        }
+        return {
+            "openapi": "3.1.0",
+            "info": {"title": CFG["name"], "version": "1.0.0",
+                     "description": f"Generated by Unclick from {CFG['source_site'] or 'a website'}. "
+                                    "Paid per call (Stripe test mode). Also available as an MCP server at /mcp."},
+            "servers": [{"url": self._base_url()}],
+            "paths": {
+                "/v1/run": {"get": run_op},
+                "/health": {"get": {"operationId": "health", "summary": "Liveness (free)",
+                                    "responses": {"200": {"description": "ok"}}}},
+                "/health/verify": {"get": {
+                    "operationId": "verify", "summary": "Re-run the client and validate output against the schema (free)",
+                    "responses": {"200": resp("Verification result", {"type": "object", "properties": {
+                        "ok": {"type": "boolean"}, "checked_at": {"type": "string", "format": "date-time"},
+                        "problems": {"type": "array", "items": {"type": "string"}}}})}}},
+            },
+            "components": {
+                "schemas": {"Data": data_schema},
+                "securitySchemes": {"UnclickKey": {"type": "apiKey", "in": "header", "name": KEY_HEADER}},
+            },
+        }
+
+    def _key(self, query: str = "") -> str:
+        key = (self.headers.get(KEY_HEADER) or "").strip()
+        if not key and query:
+            key = (dict(urllib.parse.parse_qsl(query)).get("key") or "").strip()
+        return key
+
+    def _charged_call(self, key: str, params: dict) -> tuple[int, dict, dict]:
+        """Auth + charge + client.run. Returns (status, body, headers). Failed calls are refunded."""
+        if not key:
+            return 401, {"error": "missing_key", "message": f"send header {KEY_HEADER}"}, {}
+        if CLIENT is None or CLIENT_ERROR:
+            return 503, {"error": "client_unavailable", "message": CLIENT_ERROR[-500:]}, {}
+        allowed, acct = LEDGER.charge(key)
+        if acct is None:
+            return 401, {"error": "invalid_key"}, {}
+        if not allowed:
+            return 402, {"error": "payment_required", "message": "out of API calls",
+                         "buy_url": CFG["buy_url"], "calls_remaining": 0}, {}
+        t0 = time.perf_counter()
+        try:
+            data = CLIENT.run(**params)
+        except TypeError as e:
+            LEDGER.refund(acct)
+            return 400, {"error": "bad_params", "message": str(e)}, {}
+        except Exception as e:
+            LEDGER.refund(acct)
+            return 502, {"error": "upstream_failed", "message": f"{type(e).__name__}: {e}"}, {}
+        ms = round((time.perf_counter() - t0) * 1000, 1)
+        STATS["charged"] += 1
+        remaining = max(0, acct["purchased"] - acct["used"])
+        if acct.get("customer") and CFG["stripe_key"]:
+            METER_Q.put((acct["customer"], acct["used"]))
+        return 200, {
+            "data": data,
+            "meta": {"ms": ms, "charged": True, "calls_remaining": remaining,
+                     "demo_key": bool(acct.get("demo")), "api": CFG["name"]},
+        }, {"X-Unclick-Calls-Remaining": str(remaining)}
+
+    # -- MCP (Streamable HTTP transport, JSON responses, stateless) ---------------------------
+
+    def _mcp(self, query: str):
+        if self.command != "POST":
+            return self._json(405, {"error": "method_not_allowed", "message": "POST JSON-RPC to /mcp"},
+                              {"Allow": "POST"})
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            msg = json.loads(self.rfile.read(n) or b"null")
+        except ValueError:
+            return self._json(400, {"jsonrpc": "2.0", "id": None,
+                                    "error": {"code": -32700, "message": "parse error"}})
+        key = self._key(query)
+        if isinstance(msg, list):
+            out = [r for r in (self._mcp_one(m, key) for m in msg) if r is not None]
+            return self._json(200, out) if out else self._send(202, b"", "application/json")
+        res = self._mcp_one(msg, key)
+        if res is None:
+            return self._send(202, b"", "application/json")
+        return self._json(200, res)
+
+    def _mcp_one(self, msg, key: str):
+        if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0" or "method" not in msg:
+            return {"jsonrpc": "2.0", "id": (msg or {}).get("id") if isinstance(msg, dict) else None,
+                    "error": {"code": -32600, "message": "invalid request"}}
+        mid, method, params = msg.get("id"), msg["method"], msg.get("params") or {}
+        if mid is None:  # notification (notifications/initialized, cancelled, ...)
+            return None
+
+        def ok(result):
+            return {"jsonrpc": "2.0", "id": mid, "result": result}
+
+        if method == "initialize":
+            ver = params.get("protocolVersion")
+            return ok({
+                "protocolVersion": ver if ver in MCP_VERSIONS else MCP_VERSIONS[0],
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": CFG["name"], "title": f"{CFG['name']} (Unclick)", "version": "1.0.0"},
+                "instructions": tool_description() + f" Each tools/call is charged 1 prepaid call; send header "
+                                                     f"{KEY_HEADER} (or ?key=) with your Unclick key.",
+            })
+        if method == "ping":
+            return ok({})
+        if method == "tools/list":
+            props = {p["name"]: p["schema"] for p in run_params()}
+            req = [p["name"] for p in run_params() if p["required"]]
+            schema: dict = {"type": "object", "properties": props}
+            if req:
+                schema["required"] = req
+            return ok({"tools": [{"name": tool_name(), "title": CFG["name"], "description": tool_description(),
+                                  "inputSchema": schema,
+                                  "annotations": {"readOnlyHint": True, "openWorldHint": True}}]})
+        if method == "tools/call":
+            if params.get("name") != tool_name():
+                return {"jsonrpc": "2.0", "id": mid,
+                        "error": {"code": -32602, "message": f"unknown tool {params.get('name')!r}"}}
+            STATS["calls"] += 1
+            args = params.get("arguments") or {}
+            status, body, _ = self._charged_call(key, args if isinstance(args, dict) else {})
+            if status != 200:
+                return ok({"content": [{"type": "text", "text": json.dumps(body)}], "isError": True})
+            text = json.dumps(body["data"], ensure_ascii=False, default=str)
+            return ok({"content": [{"type": "text", "text": text}], "isError": False,
+                       "_meta": {"unclick/calls_remaining": body["meta"]["calls_remaining"],
+                                 "unclick/ms": body["meta"]["ms"]}})
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}
 
     def _page(self) -> str:
-        host = self.headers.get("Host", "localhost:8000")
-        scheme = "http" if host.startswith(("localhost", "127.")) else "https"
+        base = self._base_url()
         demo = CFG.get("demo_key") or "<your key>"
-        curl = f'curl -H "{KEY_HEADER}: {demo}" "{scheme}://{host}/v1/run"'
+        curl = f'curl -H "{KEY_HEADER}: {demo}" "{base}/v1/run"'
         site = CFG["source_site"] or "#"
         buy = f' (<a href="{html.escape(CFG["buy_url"])}">buy calls</a>)' if CFG["buy_url"] else ""
+        mcp = json.dumps({"mcpServers": {CFG["name"]: {"url": base + "/mcp", "headers": {KEY_HEADER: demo}}}},
+                         indent=2)
         return PAGE.format(name=html.escape(CFG["name"]), site=html.escape(site),
                            site_text=html.escape(CFG["source_site"] or "a website"),
-                           curl=html.escape(curl), buy=buy)
+                           curl=html.escape(curl), buy=buy, tool=html.escape(tool_name()), mcp=html.escape(mcp))
 
     def _params(self, query: str) -> dict:
         params = {k: coerce(v) for k, v in urllib.parse.parse_qsl(query, keep_blank_values=True)}
@@ -363,36 +672,9 @@ class Handler(BaseHTTPRequestHandler):
             params = self._params(query)
         except Exception as e:
             return self._json(400, {"error": "bad_request", "message": str(e)})
-        key = (self.headers.get(KEY_HEADER) or "").strip()
-        if not key:
-            return self._json(401, {"error": "missing_key", "message": f"send header {KEY_HEADER}"})
-        if CLIENT is None or CLIENT_ERROR:
-            return self._json(503, {"error": "client_unavailable", "message": CLIENT_ERROR[-500:]})
-        allowed, acct = LEDGER.charge(key)
-        if acct is None:
-            return self._json(401, {"error": "invalid_key"})
-        if not allowed:
-            return self._json(402, {"error": "payment_required", "message": "out of API calls",
-                                    "buy_url": CFG["buy_url"], "calls_remaining": 0})
-        t0 = time.perf_counter()
-        try:
-            data = CLIENT.run(**params)
-        except TypeError as e:
-            LEDGER.refund(acct)
-            return self._json(400, {"error": "bad_params", "message": str(e)})
-        except Exception as e:
-            LEDGER.refund(acct)
-            return self._json(502, {"error": "upstream_failed", "message": f"{type(e).__name__}: {e}"})
-        ms = round((time.perf_counter() - t0) * 1000, 1)
-        STATS["charged"] += 1
-        remaining = max(0, acct["purchased"] - acct["used"])
-        if acct.get("customer") and CFG["stripe_key"]:
-            METER_Q.put((acct["customer"], acct["used"]))
-        return self._json(200, {
-            "data": data,
-            "meta": {"ms": ms, "charged": True, "calls_remaining": remaining,
-                     "demo_key": bool(acct.get("demo")), "api": CFG["name"]},
-        }, {"X-Unclick-Calls-Remaining": str(remaining)})
+        params.pop("key", None)  # ?key= is auth, not a client parameter
+        status, body, headers = self._charged_call(self._key(query), params)
+        return self._json(status, body, headers)
 
 
 def main() -> None:
