@@ -3,13 +3,13 @@
   'use strict';
 
   const PHASES = [
-    ['boot', 'Boot', 'Start sandboxes'],
-    ['explore', 'Explore', 'Drive Chrome'],
-    ['discover', 'Discover', 'Find the hidden API'],
-    ['code', 'Code', 'Write client.py'],
-    ['verify', 'Verify', 'Match the screen'],
-    ['publish', 'Publish', 'Fork + deploy'],
-    ['live', 'Live', 'Paid, auto-pausing API'],
+    ['boot', 'Start', 'Starting a cloud browser'],
+    ['explore', 'Watch', 'Watching the page'],
+    ['discover', 'Find', 'Finding the data source'],
+    ['code', 'Code', 'Writing the code'],
+    ['verify', 'Check', 'Checking it matches the screen'],
+    ['publish', 'Publish', 'Publishing your API'],
+    ['live', 'Live', 'Your API is live'],
   ];
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -91,6 +91,7 @@
   function setBusy(on) {
     const b = $('goBtn');
     b.disabled = on;
+    b.title = on ? 'A run is in progress' : '';
     b.classList.toggle('busy', on);
     $('goLabel').textContent = on ? 'Unclicking…' : 'Unclick it';
   }
@@ -102,7 +103,8 @@
     S.fake = fake;
     if (info && info.mode) setRunMode(info);
     else fetch(`/api/runs/${runId}`).then((r) => r.json()).then((j) => { S.fake = j.fake; setRunMode(j); }).catch(() => {});
-    history.replaceState(null, '', location.pathname + '#run=' + runId);
+    history.replaceState(null, '', location.pathname + location.search + '#run=' + runId);
+    setState('running');
     try { localStorage.setItem('unclick.lastRun', runId); } catch { /* ignore */ }
     resetUI();
     $('runId').textContent = runId;
@@ -178,6 +180,8 @@
     const calls = (billingCfg && billingCfg.calls) || 100;
     const cents = billingCfg && billingCfg.amount_cents != null ? billingCfg.amount_cents : 100;
     $('buyLabel').textContent = `Buy ${calls} calls`;
+    if ($('priceChip')) $('priceChip').textContent = priceText();
+    renderChargeNote();
     $('priceBox').innerHTML = off ? '<b>Demo key</b>unmetered' : `<b>$${(cents / 100).toFixed(2)}</b>per ${calls} calls`;
     if (S && !S.billing.last) {
       const lc = $('lastCharge');
@@ -267,12 +271,16 @@
       el.classList.toggle('done', !!(allDone || i < cur));
       el.classList.toggle('active', !allDone && i === cur && !S.failed);
       el.classList.toggle('failed', !allDone && i === cur && !!S.failed);
-      const caption = i === cur && !allDone && S.statusMsg ? S.statusMsg : cap;
+      const caption = cap;
       const c = el.querySelector('.cap');
       if (c.textContent !== caption) { c.textContent = caption; c.title = caption; }
       const tag = el.querySelector('.attempt-tag');
       tag.hidden = !(k === 'code' && attempts > 1);
       tag.textContent = `×${attempts}`;
+      if (i === Math.max(cur, 0)) {
+        const n = allDone ? PHASES.length : cur + 1;
+        $('stepPill').innerHTML = cur < 0 ? 'Starting…' : `<span class="n">Step ${n}/${PHASES.length}</span> · ${esc(allDone ? 'Your API is live' : cap)}`;
+      }
       if (lines[i]) {
         lines[i].classList.toggle('done', !!(allDone || i < cur));
         lines[i].classList.toggle('active', !allDone && i === cur && !S.failed);
@@ -352,6 +360,7 @@
   }
   function onAction(d, ev) {
     const [verb, now, done] = VERB[d.action] || [d.action || 'Do', 'Working…', 'Done'];
+    if (d.action === 'open') $('activityTitle').textContent = 'Watching the page…';
     activity(verb, d.detail || ev.message, now, done);
   }
 
@@ -383,7 +392,7 @@
   }
 
   function onEndpoint(d) {
-    { const u = splitUrl(d.url); activity('Found', u.host + u.path, 'Hidden API', '', 'ok'); }
+    { const u = splitUrl(d.url); activity('Found the data source', u.host + u.path, 'Found', '', 'ok'); }
     S.endpoint = d;
     const { host, path } = splitUrl(d.url);
     const box = $('endpointBox');
@@ -411,6 +420,7 @@
   // ---------------------------------------------------------------------------
 
   function onEgress(d) {
+    revealCard('egCard');
     const prev = S.egress ? S.egress.allow : [];
     const allow = d.allow || [];
     const added = d.added || allow.filter((h) => !prev.includes(h));
@@ -457,6 +467,7 @@
   };
 
   function onSandbox(d) {
+    revealCard('sbCard');
     const prev = S.sandboxes.get(d.id) || {};
     const sb = { ...prev, id: d.id, role: d.role || prev.role, action: d.action };
     if (d.ms != null && ['created', 'forked'].includes(d.action)) sb.bootMs = d.ms;
@@ -538,7 +549,8 @@
   // ---------------------------------------------------------------------------
 
   function onCode(d) {
-    activity('Write', `${d.filename || 'client.py'} · attempt ${d.attempt}`, 'Writing…', 'Written');
+    activity('Writing code', `${d.filename || 'client.py'} · attempt ${d.attempt}`, 'Writing…', 'Written');
+    revealAgent();
     S.codes = S.codes.filter((c) => c.attempt !== d.attempt);
     S.codes.push(d);
     S.codes.sort((a, b) => a.attempt - b.attempt);
@@ -633,7 +645,7 @@
   function clearEmpty(pane, n) { if (n === 1) pane.innerHTML = ''; }
 
   function onRun(d) {
-    activity('Run', `python ${d.filename || 'client.py'} · attempt ${d.attempt}`, `exit ${d.exit_code}`, '', d.exit_code === 0 ? 'ok' : 'bad');
+    activity('Running it', `attempt ${d.attempt}`, d.exit_code === 0 ? 'Ran cleanly' : `Error · exit ${d.exit_code}`, '', d.exit_code === 0 ? 'ok' : 'bad');
     S.runs.push(d);
     $('runCount').textContent = S.runs.length;
     const ok = d.exit_code === 0;
@@ -658,7 +670,7 @@
   }
 
   function onVerify(d) {
-    activity('Verify', `attempt ${d.attempt} vs the screen`, d.ok ? 'Match' : 'Mismatch', '', d.ok ? 'ok' : 'bad');
+    activity('Checking it matches the screen', `attempt ${d.attempt}`, d.ok ? 'Matches' : 'Does not match', '', d.ok ? 'ok' : 'bad');
     S.verifies.push(d);
     $('verifyCount').textContent = S.verifies.length;
     const el = document.createElement('div');
@@ -693,54 +705,256 @@
     const name = d.tool_name || d.name || 'unclick';
     S.publish = {
       ...d,
+      key: keyM ? keyM[1] : '',
+      keyHeader: (/(X-(?:Unclick|API)-Key)/i.exec(d.curl || '') || [])[1] || 'X-Unclick-Key',
       openapi_url: d.openapi_url || (base ? base + '/openapi.json' : ''),
       mcp_url: d.mcp_url || (base ? base + '/mcp' : ''),
       mcp_config: d.mcp_config || (base ? JSON.stringify({ mcpServers: { [name]: { url: base + '/mcp', headers: keyM ? { 'X-Unclick-Key': keyM[1] } : {} } } }, null, 2) : ''),
     };
-    const P = S.publish;
-    show('netPanel', false);
-    const card = $('apiCard');
-    card.hidden = false;
-    let host = '';
-    try { host = new URL($('urlIn').value).host.replace(/^www\./, ''); } catch { /* ignore */ }
-    card.innerHTML = `
-      <div class="success-h">
-        <span class="live-pill"><span class="dot"></span>LIVE API</span>
-        <span class="chip mono">${esc(d.sandbox_id || d.api_id || '')}</span>
-        <span id="healthChip"></span>
-        <span class="grow"></span>
-        ${d.docs_url ? `<a href="${esc(d.docs_url)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Docs ${svg(I.ext, 'ico-sm')}</a>` : ''}
-      </div>
-      <div class="success-title">${host ? `${esc(host)} <em>is now an API.</em>` : 'Your API is <em>live.</em>'}</div>
-      <div class="urlbox"><span class="u">${breakable(P.api_url)}</span><button type="button" data-copy="url" class="btn btn-ghost btn-sm">${svg(I.copy, 'ico-sm')}Copy</button></div>
-      <div class="ltabs-wrap">
-        <div class="ltabs">
-          <button type="button" class="ltab on" data-ltab="curl">curl</button>
-          <button type="button" class="ltab" data-ltab="mcp">MCP</button>
-          <button type="button" class="ltab" data-ltab="schema">Schema</button>
-          <span class="ltab-hint" id="ltabHint"></span>
-        </div>
-        <div id="lpane"></div>
-      </div>
-      <div class="success-actions">
-        <button type="button" id="tryBtn" class="btn btn-primary">${svg(I.play, 'ico-sm')}Try it</button>
-        <button type="button" id="wakeBtn" class="btn btn-ghost">${svg(I.moon, 'ico-sm')}Wake test</button>
-        <span class="grow"></span>
-        <div id="tryMeta" style="display:flex;align-items:center;gap:12px"></div>
-      </div>
-      <div id="speedBox"></div>
-      <div class="tryout scroll"><pre id="tryOut">Press <b style="color:rgb(var(--text))">Try it</b> to call the API. No LLM in the hot path: just the verified client.</pre></div>`;
+    revealCard('payCard');
+    renderApiPage();
     startStatusPoll();
-    card.querySelector('#tryBtn').onclick = tryIt;
-    card.querySelector('#wakeBtn').onclick = wakeTest;
-    card.querySelector('[data-copy="url"]').onclick = (e) => copy(P.api_url, e.currentTarget);
-    card.querySelectorAll('[data-ltab]').forEach((b) => { b.onclick = () => showLTab(b.dataset.ltab); });
-    showLTab('curl');
-    renderSpeed();
     renderStepper();
     setFocus();
     renderSummary();
     refreshCatalogCount();
+    setState('result');
+    window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }
+
+  // ---------------------------------------------------------------------------
+  // API page (result state)
+  // ---------------------------------------------------------------------------
+
+  function initialParams() {
+    // From the curl example's query string (e.g. ?limit=10); the OpenAPI doc can add more later.
+    const out = {};
+    const m = /'(https?:\/\/[^']+)'/.exec(S.publish.curl || '') || [null, S.publish.api_url];
+    try { new URL(m[1]).searchParams.forEach((v, k) => { out[k] = v; }); } catch { /* ignore */ }
+    if (!Object.keys(out).length) out.limit = '10';
+    return out;
+  }
+
+  function apiUrlWith(params) {
+    try {
+      const u = new URL(S.publish.api_url);
+      Object.entries(params).forEach(([k, v]) => { if (v !== '' && v != null) u.searchParams.set(k, v); else u.searchParams.delete(k); });
+      return u.toString();
+    } catch { return S.publish.api_url; }
+  }
+
+  function currentParams() {
+    const out = {};
+    document.querySelectorAll('#params input').forEach((i) => { out[i.name] = i.value.trim(); });
+    return out;
+  }
+
+  function priceText() {
+    const calls = (billingCfg && billingCfg.calls) || 100;
+    const cents = billingCfg && billingCfg.amount_cents != null ? billingCfg.amount_cents : 500;
+    const per = cents / calls / 100;
+    return stripeOff() ? 'Demo key · unmetered' : `$${per.toFixed(per < 0.1 ? 2 : 2)} / call · test mode`;
+  }
+
+  function apiDisplayName() {
+    const P = S.publish;
+    if (P.name && P.name !== P.api_id && P.name !== P.sandbox_id) return P.name;
+    let host = '';
+    try { host = new URL($('runUrl').textContent || $('urlIn').value).host.replace(/^www\./, ''); } catch { /* ignore */ }
+    return host ? `${host} API` : 'Your API';
+  }
+
+  function renderApiPage() {
+    const P = S.publish;
+    const page = $('apiPage');
+    const src = $('runUrl').textContent || $('urlIn').value;
+    const params = initialParams();
+    page.innerHTML = `
+      <div class="card api-head">
+        <div class="api-badges">
+          <span class="live-pill"><span class="dot"></span>LIVE</span>
+          <span class="method">GET</span>
+          <span id="healthChip"><span class="chip" title="Not verified since publishing">Verified at publish</span></span>
+          <span class="chip stripe" id="priceChip">${esc(priceText())}</span>
+        </div>
+        <h2 class="api-name">${esc(apiDisplayName())}</h2>
+        <div class="api-src">From <a href="${esc(src)}" target="_blank" rel="noopener">${esc(src.replace(/^https?:\/\//, ''))}</a>${$('runTask').textContent ? ` · ${esc($('runTask').textContent)}` : ''}</div>
+        <div class="urlbox"><span class="u">${breakable(P.api_url)}</span><button type="button" class="btn btn-ghost btn-sm" data-copy-text="${esc(P.api_url)}">${svg(I.copy, 'ico-sm')}Copy URL</button></div>
+        <div class="api-actions">
+          <button type="button" id="apiVerify" class="btn btn-ghost">${svg(I.check, 'ico-sm')}Verify</button>
+          <button type="button" id="apiHeal" class="btn btn-ghost">${svg(I.bolt, 'ico-sm')}Self-heal</button>
+          <button type="button" id="wakeBtn" class="btn btn-ghost" title="Pause-and-wake round trip">${svg(I.moon, 'ico-sm')}Wake test</button>
+          ${P.docs_url ? `<a class="btn btn-ghost" href="${esc(P.docs_url)}" target="_blank" rel="noopener">Docs ${svg(I.ext, 'ico-sm')}</a>` : ''}
+          <span class="grow"></span>
+          <button type="button" class="btn btn-ink" data-new>Build another</button>
+        </div>
+      </div>
+      <div class="api-grid">
+        <div class="card api-card">
+          <div class="card-h"><span class="card-title">Try it</span><span class="grow"></span><span class="faint small">Real request, no LLM involved</span></div>
+          <div class="card-b">
+            <form id="playForm" class="playform" autocomplete="off">
+              <div id="params" class="params">${Object.entries(params).map(([k, v]) => `<label class="param"><span>${esc(k)}</span><input name="${esc(k)}" value="${esc(v)}" inputmode="${/^\d+$/.test(v) ? 'numeric' : 'text'}" /></label>`).join('')}</div>
+              <div class="send-row" style="margin-top:12px">
+                <button type="submit" id="tryBtn" class="btn btn-primary">${svg(I.play, 'ico-sm')}Send request</button>
+                <div id="tryMeta" class="resp-meta" aria-live="polite"></div>
+              </div>
+            </form>
+            <div class="resp" id="respBox"><div class="hint">Press <b>Send request</b> to call your API. The response appears here.</div></div>
+          </div>
+        </div>
+        <div class="card api-card">
+          <div class="card-h"><span class="card-title">Use it</span><span class="grow"></span>
+            <div class="codetabs" role="tablist" id="codeTabs">
+              ${['curl', 'Python', 'JavaScript', 'MCP'].map((t, i) => `<button type="button" role="tab" data-ct="${t}" class="${i ? '' : 'on'}">${t}</button>`).join('')}
+            </div>
+          </div>
+          <div class="card-b">
+            <div class="codebox"><pre id="codeOut"></pre><button type="button" class="btn btn-ghost btn-sm copy" id="codeCopy">${svg(I.copy, 'ico-sm')}Copy</button></div>
+            <div class="code-note" id="codeNote"></div>
+          </div>
+        </div>
+      </div>
+      <div class="api-grid">
+        <div class="card api-card">
+          <div class="card-h"><span class="card-title">Schema</span><span class="grow"></span><span class="faint small" id="schemaSrc"></span></div>
+          <div class="card-b"><div class="fields" id="schemaFields"><span class="skel" style="width:120px;height:26px"></span><span class="skel" style="width:90px;height:26px"></span><span class="skel" style="width:110px;height:26px"></span></div></div>
+        </div>
+        <div class="card api-card speedcard" id="speedCard"></div>
+      </div>`;
+    page.hidden = false;
+    page.querySelector('#playForm').addEventListener('submit', (e) => { e.preventDefault(); sendTry(); });
+    page.querySelector('#wakeBtn').onclick = wakeTest;
+    page.querySelector('#apiVerify').onclick = () => apiAction('verify');
+    page.querySelector('#apiHeal').onclick = () => apiAction('heal');
+    page.querySelector('[data-new]').onclick = buildAnother;
+    page.querySelectorAll('[data-copy-text]').forEach((b) => { b.onclick = () => copy(b.dataset.copyText, b); });
+    page.querySelectorAll('[data-ct]').forEach((b) => { b.onclick = () => showCodeTab(b.dataset.ct); });
+    page.querySelector('#params').addEventListener('input', () => showCodeTab(currentCodeTab));
+    showCodeTab('curl');
+    renderSpeed();
+    loadSchema().then(({ fields, src: s2 }) => renderSchema(fields, s2));
+    loadOpenApiParams();
+  }
+
+  let currentCodeTab = 'curl';
+  function showCodeTab(t) {
+    currentCodeTab = t;
+    const P = S.publish;
+    document.querySelectorAll('[data-ct]').forEach((b) => b.classList.toggle('on', b.dataset.ct === t));
+    const url = apiUrlWith(currentParams());
+    const kh = P.keyHeader;
+    const key = P.key || 'YOUR_KEY';
+    let code = '', note = '', lang = 'bash';
+    if (t === 'curl') { code = `curl -s '${url}' \\\n  -H '${kh}: ${key}'`; note = 'Works from any terminal.'; }
+    else if (t === 'Python') { lang = 'python'; code = `import httpx\n\nr = httpx.get(\n    "${url}",\n    headers={"${kh}": "${key}"},\n    timeout=60,\n)\nr.raise_for_status()\nrows = r.json()\nprint(len(rows), "rows")`; note = 'pip install httpx'; }
+    else if (t === 'JavaScript') { lang = 'javascript'; code = `const r = await fetch("${url}", {\n  headers: { "${kh}": "${key}" },\n});\nconst rows = await r.json();\nconsole.log(rows.length, "rows");`; note = 'Node 18+ or any browser (server-side keeps your key private).'; }
+    else { lang = 'json'; code = prettyJson(P.mcp_config); note = P.mcp_url ? `Paste into Claude Desktop or Cursor's MCP settings. Endpoint: ${P.mcp_url}` : 'This API was published without an MCP endpoint.'; }
+    const out = $('codeOut');
+    try { out.innerHTML = hljs.highlight(code, { language: lang, ignoreIllegals: true }).value; } catch { out.textContent = code; }
+    $('codeNote').textContent = note;
+    $('codeCopy').onclick = (e) => copy(code, e.currentTarget);
+    $('codeCopy').innerHTML = `${svg(I.copy, 'ico-sm')}${t === 'MCP' ? 'Copy config' : 'Copy'}`;
+  }
+
+  function renderSchema(fields, src) {
+    const box = $('schemaFields');
+    if (!box) return;
+    box.innerHTML = fields.length
+      ? fields.map((f, i) => `<span class="field-chip" style="animation-delay:${i * 50}ms"><span class="n">${esc(f.name)}${f.required === false ? '?' : ''}</span><span class="t ${esc(String(f.type).split('|')[0])}">${esc(f.type)}</span></span>`).join('')
+      : '<span class="faint">Send a request to see the fields.</span>';
+    $('schemaSrc').textContent = fields.length ? src : '';
+  }
+
+  async function loadOpenApiParams() {
+    const P = S.publish;
+    if (!P.openapi_url || S.fake) return;
+    try {
+      const r = await fetch(P.openapi_url);
+      if (!r.ok) return;
+      const doc = await r.json();
+      const op = Object.values(doc.paths || {}).map((o) => o && o.get).find(Boolean);
+      const ps = (op && op.parameters || []).filter((x) => x.in === 'query' && !/key/i.test(x.name));
+      if (!ps.length) return;
+      const cur = currentParams();
+      $('params').innerHTML = ps.map((x) => {
+        const v = cur[x.name] ?? (x.schema && x.schema.default != null ? x.schema.default : '');
+        return `<label class="param" title="${esc(x.description || '')}"><span>${esc(x.name)}${x.required ? '' : '?'}</span><input name="${esc(x.name)}" value="${esc(v)}" /></label>`;
+      }).join('');
+      showCodeTab(currentCodeTab);
+    } catch { /* CORS: keep the params from the curl example */ }
+  }
+
+  function rowCount(v) {
+    if (Array.isArray(v)) return v.length;
+    if (v && typeof v === 'object') { const a = Object.values(v).find(Array.isArray); return a ? a.length : null; }
+    return null;
+  }
+
+  async function sendTry() {
+    const btn = $('tryBtn');
+    const box = $('respBox');
+    btn.disabled = true;
+    btn.title = 'Waiting for the response';
+    $('tryMeta').innerHTML = '<span class="chip info pulse"><span class="dot"></span>Calling your API…</span>';
+    box.innerHTML = '<div style="padding:14px 16px"><div class="skel skel-row" style="width:40%"></div><div class="skel skel-row"></div><div class="skel skel-row" style="width:75%"></div></div>';
+    const url = apiUrlWith(currentParams());
+    try {
+      const r = await fetch('/api/try', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run_id: S.runId, api_url: url, key: boughtKey() }) });
+      const j = await r.json().catch(() => ({}));
+      if (j.key_rejected) { try { localStorage.removeItem('unclick.key'); } catch { /* ignore */ } toast('Your stored key was rejected, so the demo key was used'); }
+      const ok = j.status >= 200 && j.status < 300;
+      if (!ok) {
+        const why = j.status === 402 ? 'Out of calls. Buy more calls to keep using this API.' : j.status === 409 ? 'This is a replay: the API it published is not running any more.' : (j.error || j.detail || (j.json && j.json.error) || `The API answered ${j.status || 'with an error'}.`);
+        throw new Error(typeof why === 'string' ? why : JSON.stringify(why));
+      }
+      S.tryMs = j.ms;
+      if (j.json && typeof j.json === 'object') S.lastTry = j.json;
+      const n = rowCount(j.json);
+      S.pendingCharge = true;
+      $('tryMeta').innerHTML = `<span class="chip solid-ok">${esc(j.status)} OK</span><span><b>${esc(fmtMs(j.ms))}</b></span>${n != null ? `<span><b>${n}</b> rows</span>` : ''}<span id="chargeNote"></span>`;
+      renderChargeNote();
+      const txt = JSON.stringify(j.json, null, 2);
+      box.innerHTML = '<pre></pre>';
+      try { box.firstChild.innerHTML = hljs.highlight(txt, { language: 'json' }).value; } catch { box.firstChild.textContent = txt; }
+      renderSpeed();
+      if (!(S.publish.fields || []).length) loadSchema().then(({ fields, src }) => renderSchema(fields, src));
+    } catch (err) {
+      $('tryMeta').innerHTML = '';
+      box.innerHTML = `<div class="err">${svg(I.x, 'ico')}<span>${esc(err.message === 'Failed to fetch' ? 'Could not reach the Unclick server. Check that it is running.' : err.message)}</span><button type="button" class="btn btn-ghost btn-sm" id="retryTry">Retry</button></div>`;
+      $('retryTry').onclick = sendTry;
+    } finally { btn.disabled = false; btn.title = ''; }
+  }
+
+  function renderChargeNote() {
+    const el = $('chargeNote');
+    if (!el || !S.pendingCharge) return;
+    const B = S.billing;
+    if (B.calls == null) { el.textContent = ''; return; }
+    el.innerHTML = stripeOff() ? `1 demo call used · <b style="font-size:15px">${esc(B.calls)}</b> left` : `charged 1 call · <b style="font-size:15px">${esc(B.calls)}</b> left`;
+  }
+
+  async function apiAction(kind) {
+    const P = S.publish;
+    const id = P.api_id || P.sandbox_id;
+    const btn = $(kind === 'verify' ? 'apiVerify' : 'apiHeal');
+    btn.disabled = true;
+    const old = btn.innerHTML;
+    btn.innerHTML = `${svg(I.spin, 'ico-sm', 'style="animation:spin .8s linear infinite"')}${kind === 'verify' ? 'Verifying…' : 'Healing…'}`;
+    try {
+      const r = await fetch(`/api/apis/${encodeURIComponent(id)}/${kind}`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 404) throw new Error(S.fake ? 'Scripted demo APIs are not saved to My APIs, so there is nothing to verify.' : 'This API is not in My APIs yet.');
+      if (!r.ok) throw new Error(j.detail || r.statusText);
+      if (kind === 'verify') {
+        onHealth({ api_id: id, ok: j.ok, healthy: j.healthy ?? j.ok, last_verified: j.last_verified, problems: j.problems });
+        toast(j.ok ? 'Verified: the output still matches the schema' : `Needs attention: ${(j.problems || [])[0] || 'verification failed'}`, 3500, j.ok ? 'ok' : 'bad');
+      } else if (j.run_id) {
+        toast('Self-heal started: re-running the agent', 3000, 'ok');
+        attach(j.run_id, undefined, j.mode ? { mode: j.mode } : undefined);
+      } else toast(j.ok ? 'Healthy: nothing to heal' : 'Self-heal did not start', 3000, j.ok ? 'ok' : 'bad');
+    } catch (err) { toast(err.message, 4500, 'bad'); }
+    finally { if (document.body.contains(btn)) { btn.disabled = false; btn.innerHTML = old; } }
   }
 
   function showLTab(name) {
@@ -853,21 +1067,24 @@
 
   // "One call instead of a hundred clicks": the agent's first run vs one call to the API.
   function renderSpeed() {
-    const box = $('speedBox');
+    const box = $('speedCard');
     if (!box || !S.publish) return;
     const end = S.tEnd || S.publishTs || Date.now() / 1000;
     const runS = S.t0 ? end - S.t0 : null;
-    if (!runS || S.tryMs == null) { box.innerHTML = ''; return; }
-    const x = Math.round((runS * 1000) / Math.max(1, S.tryMs));
-    const runTxt = runS >= 60 ? `${Math.floor(runS / 60)}m ${Math.floor(runS % 60)}s` : `${runS.toFixed(1)}s`;
-    box.innerHTML = `<div class="speed"><span class="speed-k">One call instead of a hundred clicks</span>
-      <span class="speed-v"><span class="lbl">agent run</span> <b>${esc(runTxt)}</b> → <span class="lbl">API call</span> <b>${esc(fmtMs(S.tryMs))}</b><span class="x">${x.toLocaleString()}×</span></span></div>`;
+    const runTxt = runS == null ? '…' : runS >= 60 ? `${Math.floor(runS / 60)}m ${Math.floor(runS % 60)}s` : `${runS.toFixed(1)} s`;
+    if (S.tryMs == null) {
+      box.innerHTML = `<div class="k">One call instead of a hundred clicks</div><div class="v">The agent took <b>${esc(runTxt)}</b> to learn this page once. Send a request to see how long a call takes now.</div>`;
+      return;
+    }
+    const x = runS ? Math.round((runS * 1000) / Math.max(1, S.tryMs)) : null;
+    box.innerHTML = `<div class="k">One call instead of a hundred clicks</div>${x ? `<div class="x">${x.toLocaleString()}× faster</div>` : ''}
+      <div class="v">Agent run <b>${esc(runTxt)}</b> → API call <b>${esc(fmtMs(S.tryMs))}</b>, every time, with no LLM in the loop.</div>`;
   }
 
   function onHealth(d) {
     const chip = $('healthChip');
     if (chip && S.publish && (!d.api_id || d.api_id === (S.publish.api_id || S.publish.sandbox_id))) {
-      chip.innerHTML = `<span class="chip ${d.ok ? 'ok' : 'accent'}"><span class="dot"></span>${d.ok ? 'Verified' : 'Needs heal'}</span>`;
+      chip.innerHTML = `<span class="chip ${d.ok ? 'ok' : 'accent'}" title="${esc((d.problems || []).join('; '))}"><span class="dot"></span>${d.ok ? 'Healthy' : 'Needs attention'} · checked ${esc(ago(d.last_verified || Date.now() / 1000))}</span>`;
     }
     if (catalogRows) {
       const row = catalogRows.find((r) => r.api_id === d.api_id);
@@ -888,19 +1105,22 @@
     document.body.classList.toggle('view-catalog', v === 'catalog');
     document.querySelectorAll('[data-view-btn]').forEach((b) => b.classList.toggle('on', b.dataset.viewBtn === v));
     show('catalog', v === 'catalog');
+    document.querySelectorAll('[data-view-btn]').forEach((b) => { if (b.dataset.viewBtn === v) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    const q = v === 'catalog' ? '?view=catalog' : '';
+    history.replaceState(null, '', location.pathname + q + location.hash);
     if (v === 'catalog') loadCatalog();
   }
 
   async function loadCatalog() {
     const grid = $('catGrid');
-    if (!catalogRows) grid.innerHTML = '<div class="cat-empty empty-center"><div class="empty-sub">Loading the catalog…</div></div>';
+    if (!catalogRows) grid.innerHTML = [0, 1, 2].map(() => '<div class="card cat"><div class="skel" style="height:14px;width:40%"></div><div class="skel" style="height:26px;width:70%"></div><div class="skel" style="height:14px"></div><div class="skel" style="height:36px"></div></div>').join('');
     try {
       const r = await fetch('/api/catalog');
       if (!r.ok) throw new Error(r.status === 404 ? 'not available on this server yet' : r.statusText);
       catalogRows = await r.json();
       renderCatalog();
     } catch (err) {
-      grid.innerHTML = `<div class="cat-empty">${empty(I.globe, 'Catalog unavailable', 'GET /api/catalog: ' + esc(err.message))}</div>`;
+      grid.innerHTML = `<div class="cat-empty empty-center"><div><div class="empty-title">Couldn't load your APIs</div><div class="empty-sub">${esc(err.message === 'Failed to fetch' ? 'The Unclick server is not reachable.' : err.message)}</div><button type="button" class="btn btn-ghost" data-cat-retry>Retry</button></div></div>`;
     }
   }
 
@@ -932,7 +1152,7 @@
     c.hidden = !rows.length;
     const grid = $('catGrid');
     if (!rows.length) {
-      grid.innerHTML = `<div class="cat-empty">${empty(I.globe, 'No APIs yet', 'Unclick a website and it shows up here')}</div>`;
+      grid.innerHTML = `<div class="cat-empty empty-center"><div><div class="empty-title">No APIs yet</div><div class="empty-sub">Every API you build shows up here, with health checks and self-heal.</div><button type="button" class="btn btn-primary" data-cat-build>Build your first API</button></div></div>`;
       return;
     }
     grid.innerHTML = rows.map((e, i) => {
@@ -1070,6 +1290,7 @@
   }
 
   function onBilling(d, ev) {
+    revealCard('payCard');
     const B = S.billing;
     if (d.calls_remaining != null) {
       B.calls = d.calls_remaining;
@@ -1099,6 +1320,7 @@
     }
     B.feed.unshift(`<div><span class="when">${clock(ev.ts)}</span><span class="m">${esc(ev.message)}</span></div>`);
     B.feed = B.feed.slice(0, 2);
+    renderChargeNote();
     $('billingFeed').innerHTML = B.feed.join('');
   }
 
@@ -1150,7 +1372,58 @@
     renderSummary();
     renderSpeed();
     setBusy(false);
+    $('runbarK').textContent = S.failed ? 'Stopped' : S.publish ? 'Live' : 'Finished';
     if (!S.failed) toast(d.summary ? `Done: ${d.summary}` : 'Done', 4000, 'ok');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Page state: empty (landing) → running → result
+  // ---------------------------------------------------------------------------
+
+  function setState(st) {
+    document.body.classList.remove('state-empty', 'state-running', 'state-result');
+    document.body.classList.add('state-' + st);
+    const on = st !== 'empty';
+    show('runbar', on); show('stepperWrap', on); show('mainContent', on); show('runMeta', on);
+    show('builtH', st === 'result');
+    if (on) {
+      $('runUrl').textContent = $('urlIn').value.trim();
+      $('runTask').textContent = $('taskIn').value.trim();
+      $('runbarK').textContent = st === 'result' ? 'Live' : 'Building';
+    }
+    updateRail();
+  }
+
+  function revealCard(id) {
+    const c = $(id);
+    if (c && c.hidden) { c.hidden = false; updateRail(); }
+  }
+  function updateRail() {
+    const rail = document.querySelector('.rail');
+    rail.classList.toggle('empty', ![...rail.children].some((c) => !c.hidden));
+  }
+  function revealAgent() {
+    const a = $('agentCard');
+    if (!a.hidden) return;
+    a.hidden = false;
+    // Bring the code into view if it landed below the fold.
+    setTimeout(() => {
+      const r = a.getBoundingClientRect();
+      if (r.top > innerHeight - 120 && !document.body.classList.contains('state-result')) a.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 400);
+  }
+
+  function buildAnother() {
+    if (es) { es.close(); es = null; }
+    clearInterval(timerInt);
+    S = fresh();
+    resetUI();
+    history.replaceState(null, '', location.pathname + (view === 'catalog' ? '?view=catalog' : ''));
+    setView('studio');
+    setState('empty');
+    setBusy(false);
+    window.scrollTo({ top: 0 });
+    setTimeout(() => $('urlIn').focus(), 50);
   }
 
   // ---------------------------------------------------------------------------
@@ -1195,9 +1468,12 @@
     $('capCount').textContent = '0';
     show('endpointBox', false);
     show('netPanel', true);
-    show('apiCard', false);
-    $('apiCard').innerHTML = '';
     show('summary', false);
+    ['sbCard', 'egCard', 'payCard', 'agentCard', 'apiPage'].forEach((id) => show(id, false));
+    $('apiPage').innerHTML = '';
+    $('capList').innerHTML = '<div class="skel skel-row"></div><div class="skel skel-row" style="width:80%"></div><div class="skel skel-row" style="width:65%"></div>';
+    $('stepPill').textContent = 'Starting…';
+    updateRail();
     $('egressHosts').innerHTML = '<span class="empty">Locked to the target site when the run starts</span>';
     $('egressReason').textContent = '';
     $('egressMode').textContent = 'not set';
@@ -1263,10 +1539,23 @@
   $('runForm').addEventListener('submit', startRun);
   $('buyBtn').addEventListener('click', buy);
   document.querySelectorAll('[data-view-btn]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.viewBtn)));
+  document.querySelectorAll('.example').forEach((b) => b.addEventListener('click', () => {
+    $('urlIn').value = b.dataset.url;
+    $('taskIn').value = b.dataset.task;
+    $('goBtn').focus();
+  }));
+  $('newBtn').addEventListener('click', buildAnother);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!$('toast').hidden) { $('toast').hidden = true; return; }
+    if (view === 'catalog') setView('studio');
+  });
   $('catRefresh').addEventListener('click', loadCatalog);
   $('catGrid').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
+    if (b.hasAttribute('data-cat-retry')) { loadCatalog(); return; }
+    if (b.hasAttribute('data-cat-build')) { buildAnother(); return; }
     const row = (id) => (catalogRows || []).find((x) => x.api_id === id) || {};
     if (b.dataset.catVerify) catVerify(b.dataset.catVerify);
     else if (b.dataset.catHeal) catHeal(b.dataset.catHeal);

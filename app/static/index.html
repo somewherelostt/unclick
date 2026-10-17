@@ -4,228 +4,271 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Unclick · any website into an API</title>
+  <meta name="description" content="Paste a website, say what data you want, and Unclick's agent turns it into a verified, paid API." />
   <!-- Branding lives in two files: theme.css (fonts + colors) and logo.svg -->
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="/theme.css" />
   <link rel="stylesheet" href="/app.css" />
+  <link rel="stylesheet" href="/layout.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/diff@5.2.0/dist/diff.min.js"></script>
 </head>
-<body class="focus-explore">
+<body class="state-empty view-studio">
+<a class="skip" href="#mainContent">Skip to content</a>
 <div class="app" id="app">
 
-  <!-- Floating pill nav: brand, mode, run clock -->
-  <header class="topbar reveal">
+  <!-- Floating pill nav -->
+  <header class="topbar">
     <div class="pillbar">
-      <a class="pill-nav brand" href="/"><img src="/logo.svg" alt="" class="brand-logo" /><span class="brand-name">Unclick</span></a>
-      <span class="pill-nav brand-tag">Agents that turn websites into paid APIs</span>
-      <button type="button" class="pill-nav view-btn on" data-view-btn="studio">Studio</button>
-      <button type="button" class="pill-nav view-btn" data-view-btn="catalog">Catalog <span id="catCount" class="count" hidden>0</span></button>
+      <a class="pill-nav brand" href="/" aria-label="Unclick home"><img src="/logo.svg" alt="" class="brand-logo" /><span class="brand-name">Unclick</span></a>
+      <button type="button" class="pill-nav view-btn on" data-view-btn="studio" aria-current="page">Studio</button>
+      <button type="button" class="pill-nav view-btn" data-view-btn="catalog">My APIs <span id="catCount" class="count" hidden>0</span></button>
     </div>
     <div class="pillbar topbar-right">
       <span id="modeBadge" class="pill-nav mode-badge" hidden></span>
-      <div class="pill-nav runmeta" title="Current run">
+      <div class="pill-nav runmeta" id="runMeta" title="Current run" hidden>
         <span id="runDot" class="run-dot"></span>
         <span class="lbl-run">Run</span>
-        <span id="runId" class="mono" style="color: rgb(var(--text-2))">—</span>
+        <span id="runId" class="mono run-id">—</span>
         <span class="sep"></span>
         <span id="timer" class="timer mono">00:00</span>
       </div>
     </div>
   </header>
 
-  <!-- Hero: headline + what to unclick -->
-  <section class="hero reveal reveal-2">
-    <h1 class="headline">Unclick any website.<br /><em>Into an API.</em></h1>
-    <form id="runForm" class="hero-form" autocomplete="off">
-      <label class="field field-url">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
-        <input id="urlIn" value="https://projects.dev/leaderboard" spellcheck="false" placeholder="https://any-website.com/page" aria-label="Website URL" />
-      </label>
-      <label class="field field-task">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
-        <input id="taskIn" value="Get the top projects with name, votes and URL" spellcheck="false" placeholder="What data do you want from it?" aria-label="Task" />
-      </label>
-      <button id="goBtn" type="submit" class="btn btn-primary btn-lg">
-        <svg class="ico bolt" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>
-        <svg class="ico spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
-        <span id="goLabel">Unclick it</span>
-      </button>
-    </form>
-  </section>
+  <!-- ============================== STUDIO ============================== -->
+  <div id="studio">
 
-  <!-- Phase stepper -->
-  <nav id="stepper" class="stepper reveal reveal-3" aria-label="Run phases"></nav>
-
-  <main class="main reveal reveal-4">
-    <section class="stage" id="stage">
-      <div class="stage-top">
-        <div class="stage-left">
-        <!-- Live desktop (16:9), framed by a soft blurred band -->
-        <div id="desktop" class="card desk">
-          <div class="band"></div>
-          <div class="screen">
-            <div class="desk-grid"></div>
-            <iframe id="liveFrame" hidden allow="clipboard-read; clipboard-write" title="Live desktop"></iframe>
-            <img id="shotImg" hidden alt="Desktop screenshot" />
-            <div id="deskEmpty" class="empty-center">
-              <div>
-                <div class="empty-icon"><svg class="ico" style="width:22px;height:22px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></div>
-                <div id="deskEmptyTitle" class="empty-title">CreateOS desktop sandbox</div>
-                <div class="empty-sub">Chrome appears here, live, as soon as the run starts</div>
-              </div>
-            </div>
-            <div class="desk-bar">
-              <span class="desk-label glass"><span id="liveDot" class="live-dot" hidden></span><span id="deskLabel">Desktop</span><span id="deskId" class="id" hidden></span></span>
-              <span class="grow"></span>
-              <a id="popOut" class="icon-btn glass" hidden target="_blank" rel="noopener" title="Open the live desktop in a new tab">
-                <svg class="ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
-              <div class="seg glass">
-                <button type="button" class="dv on" data-view="live">Live</button>
-                <button type="button" class="dv" data-view="shot">Screenshot</button>
-              </div>
-            </div>
-            <!-- "Unclick working…" activity feed -->
-            <div id="activity" class="activity" hidden>
-              <div class="activity-h"><img src="/logo.svg" alt="" /><span class="activity-t" id="activityTitle">Unclick working…</span><span class="grow"></span><span id="activityPhase" class="activity-s"></span></div>
-              <div id="ticker" class="activity-rows"></div>
-            </div>
-          </div>
-        </div>
-        <!-- Shown once the API is live -->
-        <div id="summary" class="card summary" hidden></div>
-        </div>
-
-        <!-- Discovery, replaced by the live API card after publish -->
-        <div class="side">
-          <div id="netPanel" class="card">
-            <div class="card-h">
-              <span class="card-title"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Hidden JSON calls</span>
-              <span id="capCount" class="count">0</span>
-              <span class="grow"></span>
-              <span class="faint hide-narrow" style="font-size:12.5px;white-space:nowrap">Chrome DevTools recorder</span>
-            </div>
-            <div id="endpointBox" hidden></div>
-            <div id="capList" class="caps scroll"></div>
-          </div>
-          <div id="apiCard" class="card success" hidden></div>
-        </div>
+    <!-- Landing (empty state) -->
+    <section id="landing" class="landing" aria-labelledby="heroTitle">
+      <h1 id="heroTitle" class="headline">Unclick any website.<br /><em>Into an API.</em></h1>
+      <p class="lede">Paste a page and say what you want from it. An agent opens it in a real browser, finds the data behind it, writes the code, checks it against the screen and hands you a paid API.</p>
+      <form id="runForm" class="hero-form" autocomplete="off">
+        <label class="field field-url">
+          <span class="sr-only">Website URL</span>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+          <input id="urlIn" type="url" inputmode="url" value="https://projects.dev/leaderboard" spellcheck="false" placeholder="https://any-website.com/page" required />
+        </label>
+        <label class="field field-task">
+          <span class="sr-only">What do you want from this page?</span>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+          <input id="taskIn" value="Get the top projects with name, votes and URL" spellcheck="false" placeholder="What do you want from this page?" required />
+        </label>
+        <button id="goBtn" type="submit" class="btn btn-primary btn-lg">
+          <svg class="ico bolt" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>
+          <svg class="ico spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+          <span id="goLabel">Unclick it</span>
+        </button>
+      </form>
+      <div class="examples" aria-label="Examples">
+        <span class="faint">Try</span>
+        <button type="button" class="example" data-url="https://projects.dev/leaderboard" data-task="Get the top projects with name, votes and URL">projects.dev leaderboard</button>
+        <button type="button" class="example" data-url="https://www.ycombinator.com/companies" data-task="List companies with name, batch, one-liner and website">YC companies directory</button>
+        <button type="button" class="example" data-url="https://news.ycombinator.com/" data-task="Top stories with title, points, comments and link">Hacker News front page</button>
       </div>
-
-      <!-- Agent: code + runs/verify/timeline -->
-      <div class="card agent">
-        <div class="agent-col">
-          <div class="card-h">
-            <span class="card-title"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 6-6 6 6 6M16 6l6 6-6 6"/></svg>Agent code</span>
-            <div id="attemptPills" class="pills"></div>
-            <span class="grow"></span>
-            <span id="codeMeta" class="code-meta"></span>
-          </div>
-          <div id="codeView" class="codeview scroll"></div>
-        </div>
-        <div class="agent-col">
-          <div class="card-h" style="padding-top:8px;padding-bottom:8px">
-            <div class="tabs">
-              <button type="button" class="tab" data-rtab="runs">Runs <span id="runCount" class="count">0</span></button>
-              <button type="button" class="tab" data-rtab="verify">Verify <span id="verifyCount" class="count">0</span></button>
-              <button type="button" class="tab" data-rtab="log">Timeline</button>
-            </div>
-            <span class="grow"></span>
-            <button type="button" id="followBtn" class="follow on" title="Switch tabs automatically as the agent works"><span class="dot"></span>Follow</button>
-          </div>
-          <div class="panes">
-            <div id="pane-runs" class="pane scroll"></div>
-            <div id="pane-verify" class="pane scroll" hidden></div>
-            <div id="pane-log" class="pane log scroll" hidden></div>
-          </div>
-        </div>
-      </div>
+      <ol class="how">
+        <li><span class="how-n">1</span><div><b>Watch the agent</b><span>It opens the page in a cloud browser and finds the data behind it.</span></div></li>
+        <li><span class="how-n">2</span><div><b>It writes and checks the code</b><span>A Python client, re-run and fixed until it matches the screen.</span></div></li>
+        <li><span class="how-n">3</span><div><b>You get an API</b><span>A public URL, MCP tool and per-call billing, paused when idle.</span></div></li>
+      </ol>
+      <dl class="proof">
+        <div><dt>68 s</dt><dd>to build an API</dd></div>
+        <div><dt>~1.3 s</dt><dd>per call</dd></div>
+        <div><dt>0</dt><dd>LLM calls per request</dd></div>
+      </dl>
     </section>
 
-    <!-- Sponsor rail -->
-    <aside class="rail">
-      <div class="card sb">
-        <div class="card-h">
-          <div class="sponsor">
-            <span class="sponsor-mark createos"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg></span>
-            <div><div class="sponsor-k" id="sbKicker">CreateOS</div><div class="sponsor-t" id="sbTitle">Sandboxes</div></div>
-          </div>
-          <span class="grow"></span>
-          <span id="sbCount" class="chip">0 running</span>
-        </div>
-        <div class="card-b">
-          <div id="sbList"></div>
-          <div id="forkBox" hidden></div>
-          <div id="pauseBox" hidden></div>
-        </div>
+    <!-- Run bar (running + result) -->
+    <section id="runbar" class="runbar" hidden>
+      <div class="runbar-main">
+        <span class="runbar-k" id="runbarK">Building</span>
+        <span class="runbar-url mono" id="runUrl"></span>
+        <span class="runbar-task" id="runTask"></span>
       </div>
+      <button type="button" id="newBtn" class="btn btn-ghost">Build another</button>
+    </section>
 
-      <div class="card">
-        <div class="card-h">
-          <div class="sponsor">
-            <span class="sponsor-mark egress"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
-            <div><div class="sponsor-k">CreateOS</div><div class="sponsor-t">Egress allowlist</div></div>
-          </div>
-          <span class="grow"></span>
-          <span id="egressMode" class="chip">not set</span>
-        </div>
-        <div class="card-b">
-          <div id="egressHosts" class="hosts"></div>
-          <div id="egressReason" class="egress-why"></div>
-          <div class="egress-foot">
-            <svg class="ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>
-            Every other host is denied by default
-          </div>
-        </div>
-      </div>
+    <!-- Phase stepper (sticky) -->
+    <nav id="stepperWrap" class="stepper-wrap" aria-label="Progress" hidden>
+      <div id="stepper" class="stepper"></div>
+      <div id="stepPill" class="step-pill" aria-live="polite"></div>
+    </nav>
 
-      <div class="card">
-        <div class="card-h">
-          <div class="sponsor">
-            <span class="sponsor-mark stripe"><svg class="ico" viewBox="0 0 24 24" fill="currentColor"><path d="M13.5 9.2c0-.8.7-1.1 1.8-1.1 1.6 0 3.6.5 5.2 1.4V4.6a13.8 13.8 0 0 0-5.2-1C10.9 3.6 8 5.8 8 9.5c0 5.8 7.9 4.8 7.9 7.3 0 .9-.8 1.3-2 1.3-1.7 0-3.9-.7-5.6-1.7v5a14.3 14.3 0 0 0 5.6 1.2c4.4 0 7.4-2.2 7.4-5.9 0-6.2-7.8-5.1-7.8-7.5z" transform="translate(-2 0)"/></svg></span>
-            <div><div class="sponsor-k">Stripe</div><div class="sponsor-t">Billing</div></div>
-          </div>
-          <span class="grow"></span>
-          <span id="stripeModeChip" class="chip stripe">Test mode</span>
-        </div>
-        <div class="card-b">
-          <div class="calls">
-            <div>
-              <div class="calls-k">Calls remaining</div>
-              <div id="callsLeft" class="calls-v">—</div>
+    <main class="main" id="mainContent" hidden>
+      <div class="content">
+
+        <!-- Result: the API page -->
+        <section id="apiPage" class="apipage" hidden aria-label="Your API"></section>
+
+        <h2 id="builtH" class="section-h" hidden>How it was built</h2>
+
+        <!-- Running: stage -->
+        <section class="stage" id="stage" aria-label="Agent at work">
+          <div class="stage-top">
+            <div class="stage-left">
+              <div id="desktop" class="card desk">
+                <div class="band"></div>
+                <div class="screen">
+                  <div class="desk-grid"></div>
+                  <iframe id="liveFrame" hidden allow="clipboard-read; clipboard-write" title="Live view of the agent's browser"></iframe>
+                  <img id="shotImg" hidden alt="Screenshot of the agent's browser" />
+                  <div id="deskEmpty" class="empty-center">
+                    <div>
+                      <div class="skeleton-screen" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+                      <div id="deskEmptyTitle" class="empty-title">Starting a cloud browser…</div>
+                      <div class="empty-sub">The page appears here, live, in a few seconds</div>
+                    </div>
+                  </div>
+                  <div class="desk-bar">
+                    <span class="desk-label glass"><span id="liveDot" class="live-dot" hidden></span><span id="deskLabel">Browser</span><span id="deskId" class="id" hidden></span></span>
+                    <span class="grow"></span>
+                    <a id="popOut" class="icon-btn glass" hidden target="_blank" rel="noopener" title="Open the live view in a new tab" aria-label="Open the live view in a new tab">
+                      <svg class="ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
+                    <div class="seg glass" role="group" aria-label="View">
+                      <button type="button" class="dv on" data-view="live">Live</button>
+                      <button type="button" class="dv" data-view="shot">Screenshot</button>
+                    </div>
+                  </div>
+                  <div id="activity" class="activity" hidden>
+                    <div class="activity-h"><img src="/logo.svg" alt="" /><span class="activity-t" id="activityTitle">Unclick working…</span><span class="grow"></span><span id="activityPhase" class="activity-s"></span></div>
+                    <div id="ticker" class="activity-rows" aria-live="polite"></div>
+                  </div>
+                </div>
+              </div>
+              <div id="summary" class="card summary" hidden></div>
             </div>
-            <div class="price" id="priceBox"></div>
-          </div>
-          <button type="button" id="buyBtn" class="btn btn-ink buy">
-            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
-            <span id="buyLabel">Buy 100 calls</span>
-          </button>
-          <div id="lastCharge" class="charge">No charges yet</div>
-          <div id="billingFeed" class="feed"></div>
-        </div>
-      </div>
-    </aside>
-  </main>
 
-  <!-- Catalog of published APIs (GET /api/catalog) -->
-  <section id="catalog" class="catalog" hidden>
+            <div class="side">
+              <div id="netPanel" class="card">
+                <div class="card-h">
+                  <span class="card-title">Data sources</span>
+                  <span id="capCount" class="count">0</span>
+                  <span class="grow"></span>
+                  <span class="faint hide-narrow small">JSON the page loads</span>
+                </div>
+                <div id="endpointBox" hidden></div>
+                <div id="capList" class="caps scroll"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card agent" id="agentCard" hidden>
+            <div class="agent-col">
+              <div class="card-h">
+                <span class="card-title">The code</span>
+                <div id="attemptPills" class="pills"></div>
+                <span class="grow"></span>
+                <span id="codeMeta" class="code-meta"></span>
+              </div>
+              <div id="codeView" class="codeview scroll" tabindex="0" aria-label="Generated client code"></div>
+            </div>
+            <div class="agent-col">
+              <div class="card-h">
+                <div class="tabs" role="tablist">
+                  <button type="button" class="tab" role="tab" data-rtab="runs">Runs <span id="runCount" class="count">0</span></button>
+                  <button type="button" class="tab" role="tab" data-rtab="verify">Checks <span id="verifyCount" class="count">0</span></button>
+                  <button type="button" class="tab" role="tab" data-rtab="log">Timeline</button>
+                </div>
+                <span class="grow"></span>
+                <button type="button" id="followBtn" class="follow on" title="Switch tabs automatically as the agent works"><span class="dot"></span>Follow</button>
+              </div>
+              <div class="panes">
+                <div id="pane-runs" class="pane scroll"></div>
+                <div id="pane-verify" class="pane scroll" hidden></div>
+                <div id="pane-log" class="pane log scroll" hidden></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Sponsor rail: each card appears with its first event -->
+      <aside class="rail" aria-label="Infrastructure">
+        <div class="card sb" id="sbCard" hidden>
+          <div class="card-h">
+            <div class="sponsor">
+              <span class="sponsor-mark createos"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg></span>
+              <div><div class="sponsor-k" id="sbKicker">CreateOS</div><div class="sponsor-t" id="sbTitle">Sandboxes</div></div>
+            </div>
+            <span class="grow"></span>
+            <span id="sbCount" class="chip">0 active</span>
+          </div>
+          <div class="card-b">
+            <div id="sbList"></div>
+            <div id="forkBox" hidden></div>
+            <div id="pauseBox" hidden></div>
+          </div>
+        </div>
+
+        <div class="card" id="egCard" hidden>
+          <div class="card-h">
+            <div class="sponsor">
+              <span class="sponsor-mark egress"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+              <div><div class="sponsor-k">CreateOS</div><div class="sponsor-t">Egress allowlist</div></div>
+            </div>
+            <span class="grow"></span>
+            <span id="egressMode" class="chip">not set</span>
+          </div>
+          <div class="card-b">
+            <div id="egressHosts" class="hosts"></div>
+            <div id="egressReason" class="egress-why"></div>
+            <div class="egress-foot">
+              <svg class="ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>
+              Every other host is denied by default
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="payCard" hidden>
+          <div class="card-h">
+            <div class="sponsor">
+              <span class="sponsor-mark stripe"><svg class="ico" viewBox="0 0 24 24" fill="currentColor"><path d="M13.5 9.2c0-.8.7-1.1 1.8-1.1 1.6 0 3.6.5 5.2 1.4V4.6a13.8 13.8 0 0 0-5.2-1C10.9 3.6 8 5.8 8 9.5c0 5.8 7.9 4.8 7.9 7.3 0 .9-.8 1.3-2 1.3-1.7 0-3.9-.7-5.6-1.7v5a14.3 14.3 0 0 0 5.6 1.2c4.4 0 7.4-2.2 7.4-5.9 0-6.2-7.8-5.1-7.8-7.5z" transform="translate(-2 0)"/></svg></span>
+              <div><div class="sponsor-k">Stripe</div><div class="sponsor-t">Billing</div></div>
+            </div>
+            <span class="grow"></span>
+            <span id="stripeModeChip" class="chip stripe">Test mode</span>
+          </div>
+          <div class="card-b">
+            <div class="calls">
+              <div>
+                <div class="calls-k">Calls remaining</div>
+                <div id="callsLeft" class="calls-v">—</div>
+              </div>
+              <div class="price" id="priceBox"></div>
+            </div>
+            <button type="button" id="buyBtn" class="btn btn-ink buy">
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+              <span id="buyLabel">Buy 100 calls</span>
+            </button>
+            <div id="lastCharge" class="charge">No charges yet</div>
+            <div id="billingFeed" class="feed"></div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- ============================== MY APIs ============================== -->
+  <section id="catalog" class="catalog" hidden aria-labelledby="catTitle">
     <div class="catalog-h">
       <div>
-        <h2 class="catalog-title">Catalog</h2>
-        <div class="faint">Every API Unclick has published. Verify re-checks the live output against its schema; Self-heal re-runs the agent when a site changes.</div>
+        <h2 id="catTitle" class="catalog-title">My APIs</h2>
+        <p class="faint lede-sm">Every API you've built. <b>Verify</b> re-checks the live output against its schema; <b>Self-heal</b> re-runs the agent when a site changes.</p>
       </div>
       <span class="grow"></span>
-      <button type="button" id="catRefresh" class="btn btn-ghost btn-sm">Refresh</button>
+      <button type="button" id="catRefresh" class="btn btn-ghost">Refresh</button>
     </div>
-    <div id="catGrid" class="cat-grid"></div>
+    <div id="catGrid" class="cat-grid" aria-live="polite"></div>
   </section>
 </div>
 
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="/app.js"></script>
 </body>
