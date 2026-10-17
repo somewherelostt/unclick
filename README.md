@@ -153,32 +153,10 @@ flowchart LR
 
 ### Architecture
 
-```
- Browser UI (app/static: vanilla JS + Tailwind)
-    │  POST /api/runs {url, task}            GET /api/runs/{id}/events  (SSE)
-    ▼
- Orchestrator (app/main.py, FastAPI)  ── mounts ──►  unclick/billing.py  (/api/billing/*: Stripe Checkout, usage)
-    │  runs pipeline in a thread, forwards every EventSink event to the UI
-    ▼
- unclick/pipeline.py:  boot → explore → discover → code/verify → publish
-    │                       │                         │               │
-    │            unclick/agent.py (LLM:       unclick/desktop.py   unclick/publish.py
-    │            tool calls + vision)         Chrome + CDP         pause → fork → upload → start
-    │                       │                 recorder + noVNC            │
-    ▼                       ▼                         ▼               ▼
- unclick/sandbox.py  ── CreateOS Sandbox REST API (httpx) ────────────────────────────┐
-                                                                                       │
-   ┌──────────────────────────────┐   verified    ┌──────────────────────────────┐    │
-   │ desktop:1 sandbox            │   client.py   │ devbox:1 runner  ──fork──►    │◄───┘
-   │ Chrome + CDP + noVNC         │ ────────────► │ API sandbox (public URL)      │
-   │ egress: target site          │               │ server.py + client.py         │
-   └──────────────────────────────┘               │ egress: backend + Stripe      │
-                                                  │ auto-pause 60 s, wake-on-req  │
- curl -H "X-Unclick-Key: ..." https://<id>-8000.<domain>/v1/run ────────────────► └──────────────┬───────────────┘
-                                                                                                 │ meter event + usage
-                                                                                                 ▼
-                                                                                      Stripe (test mode)
-```
+<div align="center">
+  <img src="docs/architecture.png" alt="Unclick architecture: UI and orchestrator, the five pipeline steps, the desktop, runner and published API sandboxes, Stripe, and the caller" />
+  <p><em>Editable source: <a href="docs/architecture.excalidraw">docs/architecture.excalidraw</a> (open it at <a href="https://excalidraw.com">excalidraw.com</a>)</em></p>
+</div>
 
 All progress goes through one `EventSink.emit(kind, message, **data)` contract ([unclick/contracts.py](unclick/contracts.py)). The UI is a pure renderer of those events, which is also why the scripted demo and replay modes work.
 
