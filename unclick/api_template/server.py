@@ -277,6 +277,10 @@ def run_params() -> list[dict]:
         sig = inspect.signature(CLIENT.run)
     except (TypeError, ValueError):
         return []
+    docs = getattr(CLIENT, "PARAM_DOCS", None)
+    docs = docs if isinstance(docs, dict) else {}
+    examples = getattr(CLIENT, "EXAMPLE_PARAMS", None)
+    examples = examples if isinstance(examples, dict) else {}
     for p in sig.parameters.values():
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             continue
@@ -292,7 +296,26 @@ def run_params() -> list[dict]:
         schema: dict = {"type": _PY_TO_JSON.get(ann, "string")}
         if p.default is not inspect.Parameter.empty and isinstance(p.default, (bool, int, float, str)):
             schema["default"] = p.default
-        out.append({"name": p.name, "schema": schema, "required": p.default is inspect.Parameter.empty})
+        if isinstance(docs.get(p.name), str):
+            schema["description"] = docs[p.name]
+        if isinstance(examples.get(p.name), (bool, int, float, str)):
+            schema["examples"] = [examples[p.name]]
+        out.append({"name": p.name, "schema": schema, "required": p.default is inspect.Parameter.empty,
+                    "description": schema.get("description", "")})
+    return out
+
+
+def typed_params(params: dict) -> dict:
+    """Query-string values are guessed by coerce(); fix them up to run()'s declared types (q=2024 stays a str)."""
+    types = {p["name"]: p["schema"].get("type") for p in run_params()}
+    out = {}
+    for k, v in params.items():
+        t = types.get(k)
+        if t == "string" and not isinstance(v, str):
+            v = str(v).lower() if isinstance(v, bool) else str(v)
+        elif t == "number" and isinstance(v, int) and not isinstance(v, bool):
+            v = float(v)
+        out[k] = v
     return out
 
 
@@ -309,6 +332,9 @@ def tool_description() -> str:
     desc = f"Live data from {site}"
     if task:
         desc += f": {task}"
+    names = [p["name"] for p in run_params()]
+    if names:
+        desc += ". Parameters: " + ", ".join(names)
     return desc + ". Returns JSON (verified against what the site shows on screen)."
 
 
@@ -493,7 +519,8 @@ class Handler(BaseHTTPRequestHandler):
         return f"{scheme}://{host}"
 
     def _openapi(self) -> dict:
-        params = [{"name": p["name"], "in": "query", "required": p["required"], "schema": p["schema"]}
+        params = [{"name": p["name"], "in": "query", "required": p["required"], "schema": p["schema"],
+                   **({"description": p["description"]} if p["description"] else {})}
                   for p in run_params()]
         data_schema = SCHEMA or {}
         ok_schema = {"type": "object", "required": ["data", "meta"], "properties": {
@@ -556,7 +583,7 @@ class Handler(BaseHTTPRequestHandler):
                          "buy_url": CFG["buy_url"], "calls_remaining": 0}, {}
         t0 = time.perf_counter()
         try:
-            data = CLIENT.run(**params)
+            data = CLIENT.run(**typed_params(params))
         except TypeError as e:
             LEDGER.refund(acct)
             return 400, {"error": "bad_params", "message": str(e)}, {}

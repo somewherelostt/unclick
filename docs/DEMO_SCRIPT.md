@@ -55,12 +55,24 @@ Lines in **bold** are said on camera or as voice-over. `[brackets]` are screen a
 `[Terminal or the "Try it" button: run the curl from the API card.]`
 
 ```bash
-curl -H "X-Unclick-Key: <demo key>" "https://<id>-8000.app.sb.createos.sh/v1/run"
+curl -H "X-Unclick-Key: <demo key>" "https://<id>-8000.app.sb.createos.sh/v1/run?limit=5"
 ```
 
 > **"One curl, clean JSON, under a second, and no LLM in the request path. The website is now an API."**
 
-## 1:50–2:05 · Stripe charge
+`[Try it panel: the params row shows the typed inputs from /openapi.json (on projects.dev: hackathon, limit). Change one value, e.g. hackathon=stripe or limit=5, press Send, and the rows change.]`
+
+> **"And it's not a snapshot of that one page. Unclick exposes the site's own filters and search as typed parameters, with the on-screen view as the default. Change the filter, get different live data."**
+
+## 1:50–2:00 · It's general: a montage of other APIs (My APIs)
+
+`[Quick cuts, ~3 s each, in My APIs: the Hacker News search API and the crates.io search API (built earlier in local mode; label the clip "local mode"). In each, Try it with a new ?q= (HN: q=rust; crates.io: q=tokio&sort=downloads) and show the result. Then the MCP tab: tools/list showing inputSchema with q, page, limit, sort and their descriptions.]`
+
+> **"Same agent, any site. Hacker News search, crates.io search: each one became a typed search API with q, page and sort, plus an MCP tool your agents can call with those parameters."**
+
+*Be honest about modes: only the projects.dev run is a real CreateOS run in this video. The montage APIs were built in local mode (same pipeline and agent, local Chrome instead of a sandbox). Put a small "local mode" label on those clips. If you can't fit this section, cut the Auto-pause section to 10 s instead.*
+
+## 2:00–2:10 · Stripe charge
 
 `[Billing area in the UI: "Buy 100 calls" → Stripe Checkout in test mode (card 4242 4242 4242 4242) → back in the app with an API key and "calls remaining". Then call the API with the new key; remaining count drops.]`
 
@@ -68,7 +80,7 @@ curl -H "X-Unclick-Key: <demo key>" "https://<id>-8000.app.sb.createos.sh/v1/run
 
 *If Stripe Checkout isn't verified on the take, show only the metered call (the "calls remaining" header dropping) and the Stripe Dashboard test-mode meter events, and don't say "Checkout" unless you show it.*
 
-## 2:05–2:20 · Auto-pause and wake
+## 2:10–2:20 · Auto-pause and wake
 
 `[Sandboxes panel / API card: status "paused" after about a minute idle. Click "Wake test" or run the curl again. Show the latency number.]`
 
