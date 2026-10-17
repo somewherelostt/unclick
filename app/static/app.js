@@ -43,20 +43,21 @@
     try {
       const r = await fetch('/api/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, task }) });
       if (!r.ok) throw new Error(await r.text());
-      const { run_id, fake } = await r.json();
-      attach(run_id, fake);
+      const j = await r.json();
+      attach(j.run_id, j.fake, j);
     } catch (err) {
       toast('Could not start run: ' + err.message);
       $('goBtn').disabled = false;
     }
   }
 
-  function attach(runId, fake) {
+  function attach(runId, fake, info) {
     if (es) es.close();
     S = fresh();
     S.runId = runId;
     S.fake = fake;
-    if (fake === undefined) fetch(`/api/runs/${runId}`).then((r) => r.json()).then((j) => { S.fake = j.fake; }).catch(() => {});
+    if (info && info.mode) setRunMode(info);
+    else fetch(`/api/runs/${runId}`).then((r) => r.json()).then((j) => { S.fake = j.fake; setRunMode(j); }).catch(() => {});
     history.replaceState(null, '', location.pathname + '#run=' + runId);
     try { localStorage.setItem('unclick.lastRun', runId); } catch { /* ignore */ }
     resetUI();
@@ -81,6 +82,57 @@
     };
     clearInterval(timerInt);
     timerInt = setInterval(tick, 250);
+  }
+
+  // Never let a local or replayed run pass as a live CreateOS run: the header badge says what is running.
+  function setRunMode(info) {
+    if (!S) return;
+    S.mode = info.mode;
+    S.replayOf = info.replay_of;
+    S.recordedMode = info.recorded_mode;
+    if (info.url && info.mode === 'replay') { $('urlIn').value = info.url; $('taskIn').value = info.task || $('taskIn').value; }
+    renderModeBadge();
+    renderRoles();
+  }
+
+  const MODE_LABEL = { local: 'LOCAL SANDBOX', createos: 'CREATEOS', fake: 'FAKE PIPELINE' };
+  function renderModeBadge() {
+    const b = $('modeBadge');
+    const mode = (S && S.mode) || (config.fake ? 'fake' : config.sandbox) || 'createos';
+    let text = MODE_LABEL[mode] || mode.toUpperCase();
+    let tip = '';
+    if (mode === 'replay') {
+      const rec = S && S.recordedMode ? (MODE_LABEL[S.recordedMode] || S.recordedMode.toUpperCase()) : 'RECORDED';
+      text = `REPLAY · ${rec}`;
+      tip = `Replaying the recording ${S && S.replayOf ? S.replayOf : ''} (not a live run)`;
+    } else if (mode === 'local') {
+      tip = 'Local sandbox mode: real agent + local Chrome + local processes. No CreateOS sandboxes; egress, fork and auto-pause are not enforced.';
+    } else if (!config.pipeline && !config.fake) text = 'NO PIPELINE · FAKE';
+    const warn = mode !== 'createos';
+    b.textContent = text;
+    b.title = tip;
+    b.className = 'chip font-bold tracking-wider ' + (warn ? 'bg-amber-500/15 text-amber-300 border-amber-500/40' : 'bg-ink-800 border-ink-600 text-slate-400');
+    b.classList.toggle('hidden', mode === 'createos' && !tip);
+  }
+
+  function stripeOff() { return !config.stripe && !config.fake && !(S && S.fake); }
+  function renderBillingMode() {
+    const off = stripeOff();
+    const btn = $('buyBtn');
+    btn.disabled = off;
+    btn.title = off ? 'Stripe test mode is not configured (no STRIPE_SECRET_KEY). The published API runs on its demo key.' : '';
+    btn.classList.toggle('opacity-40', off);
+    btn.classList.toggle('cursor-not-allowed', off);
+    const chip = $('stripeModeChip');
+    if (chip) {
+      chip.textContent = off ? 'demo key' : 'test mode';
+      chip.title = off ? 'Stripe test mode: not configured' : 'Stripe test mode';
+    }
+    if (off && S && !S.billing.last) {
+      const lc = $('lastCharge');
+      lc.className = 'rounded-xl bg-amber-500/5 border border-amber-500/30 px-3 py-2 text-[13px] text-amber-200';
+      lc.textContent = 'Stripe test mode: not configured. Demo key active';
+    }
   }
 
   function tick() {
@@ -310,6 +362,17 @@
     runner: { label: 'Runner', sub: 'devbox:1 · runs client.py', color: 'violet' },
     api: { label: 'Public API', sub: 'ingress · auto-pause', color: 'brand' },
   };
+  const ROLE_SUB = { desktop: 'desktop:1 · Chrome', runner: 'devbox:1 · runs client.py', api: 'ingress · auto-pause' };
+  const ROLE_SUB_LOCAL = { desktop: 'local process · local Chrome', runner: 'local process · runs client.py', api: 'local process · 127.0.0.1' };
+  function isLocal() { return S && (S.mode === 'local' || (S.mode === 'replay' && S.recordedMode === 'local')); }
+  function renderRoles() {
+    const subs = isLocal() ? ROLE_SUB_LOCAL : ROLE_SUB;
+    Object.keys(ROLE).forEach((k) => { ROLE[k].sub = subs[k]; });
+    if (S && S.sandboxes.size) renderSandboxes();
+    $('deskLabel').textContent = S && S.liveUrl ? 'LIVE DESKTOP' : isLocal() ? 'LOCAL CHROME' : 'DESKTOP';
+    if ($('sbTitle')) $('sbTitle').textContent = isLocal() ? 'Local sandboxes (no CreateOS)' : 'CreateOS Sandboxes';
+    if ($('deskEmptyTitle')) $('deskEmptyTitle').textContent = isLocal() || (!S.mode && config.sandbox === 'local') ? 'Local Chrome (local sandbox mode)' : 'CreateOS desktop sandbox';
+  }
   const STATE = {
     created: ['Running', 'emerald'], forked: ['Running', 'emerald'], resumed: ['Running', 'emerald'],
     pausing: ['Pausing…', 'amber'], paused: ['Paused', 'amber'], destroyed: ['Destroyed', 'slate'],
@@ -593,6 +656,7 @@
     try {
       const r = await fetch('/api/try', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run_id: S.runId, api_url: S.publish.api_url, key: boughtKey() }) });
       const j = await r.json();
+      if (j.key_rejected) { try { localStorage.removeItem('unclick.key'); } catch { /* ignore */ } toast('Stored API key was rejected: used the demo key'); }
       const ok = j.status >= 200 && j.status < 300;
       $('tryMeta').innerHTML = `<span class="chip ${ok ? 'bg-emerald-500 text-ink-950' : 'bg-red-500 text-white'} font-bold">${esc(j.status || 'ERR')}</span><span class="kbd text-[15px] font-bold text-white">${esc(fmtMs(j.ms))}</span>`;
       const body = j.json !== undefined ? j.json : j.error || j.detail;
@@ -613,7 +677,8 @@
       const r = await fetch('/api/wake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run_id: S.runId, api_url: S.publish.api_url }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.detail || r.statusText);
-      showWake(j.wake_ms);
+      if (j.local) $('tryMeta').innerHTML = `<span class="text-[12px] text-slate-400" title="Local sandbox mode: the API never pauses">local · /health in</span><span class="kbd text-[20px] font-extrabold text-sky-300">${esc(fmtMs(j.wake_ms))}</span>`;
+      else showWake(j.wake_ms);
     } catch (err) {
       $('tryMeta').innerHTML = `<span class="chip bg-red-500/15 text-red-300 border-red-500/30">wake failed</span>`;
       toast('Wake test failed: ' + err.message);
@@ -651,7 +716,9 @@
     if (d.api_key) B.apiKey = d.api_key;
     if (d.event === 'paid' && d.api_key) { try { localStorage.setItem('unclick.key', d.api_key); } catch { /* ignore */ } }
     const cents = d.amount_cents != null ? `$${(d.amount_cents / 100).toFixed(2)}` : '';
-    if (d.event === 'call_charged') {
+    if (d.event === 'call_charged' && d.metered === false) {
+      B.last = `<div class="flex items-center gap-2"><span class="chip bg-amber-500/15 text-amber-300 border-amber-500/40">demo key</span><span class="text-white font-semibold">1 demo call used</span><div class="flex-1"></div><span class="kbd text-slate-400 text-[11px]">not metered</span><span class="kbd text-slate-500 text-[11px]">${clock(ev.ts)}</span></div>`;
+    } else if (d.event === 'call_charged') {
       B.last = `<div class="flex items-center gap-2"><span class="chip bg-stripe/20 text-stripe-light border-stripe/40">usage</span><span class="text-white font-semibold">1 API call charged</span><div class="flex-1"></div><span class="kbd text-white">${esc(cents)}</span><span class="kbd text-slate-500 text-[11px]">${clock(ev.ts)}</span></div>`;
     } else if (d.event === 'paid') {
       B.last = `<div class="flex items-center gap-2"><span class="chip bg-emerald-500/20 text-emerald-300 border-emerald-500/40">paid</span><span class="text-white font-semibold">Checkout complete</span><div class="flex-1"></div><span class="kbd text-white">${esc(cents)}</span><span class="kbd text-slate-500 text-[11px]">${clock(ev.ts)}</span></div>
@@ -671,6 +738,7 @@
 
   async function buy() {
     const btn = $('buyBtn');
+    if (stripeOff()) { toast('Stripe test mode is not configured: demo key active'); return; }
     btn.disabled = true;
     try {
       const fakeBuy = (S && S.fake) || !config.billing;
@@ -685,7 +753,7 @@
       toast(j.fake ? 'Test purchase simulated: +100 calls' : 'Checkout created');
     } catch (err) {
       toast('Checkout failed: ' + err.message);
-    } finally { btn.disabled = false; }
+    } finally { renderBillingMode(); if (!stripeOff()) btn.disabled = false; }
   }
 
   // ---------------------------------------------------------------------------
@@ -788,6 +856,9 @@
     $('lastCharge').textContent = 'No charges yet';
     $('billingFeed').innerHTML = '';
     $('timer').textContent = '00:00';
+    renderModeBadge();
+    renderRoles();
+    renderBillingMode();
     showRTab('log');
     setFollow(true);
     renderDesk();
@@ -812,6 +883,15 @@
     setTimeout(() => { btn.textContent = old; }, 1200);
   }
 
+  async function startReplay(name, speed) {
+    try {
+      const r = await fetch('/api/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ replay: name, speed: speed ? Number(speed) : undefined }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || r.statusText);
+      attach(j.run_id, j.fake, j);
+    } catch (err) { toast('Replay failed: ' + err.message, 5000); }
+  }
+
   // Wire up
   $('runForm').addEventListener('submit', startRun);
   $('buyBtn').addEventListener('click', buy);
@@ -832,18 +912,21 @@
 
   S = fresh();
   resetUI();
+  const qs = new URLSearchParams(location.search);
   fetch('/api/config').then((r) => r.json()).then((c) => {
     config = c;
-    if (c.fake || !c.pipeline) { const b = $('modeBadge'); b.textContent = c.fake ? 'FAKE PIPELINE' : 'NO PIPELINE · FAKE'; b.classList.remove('hidden'); }
+    renderModeBadge();
+    renderRoles();
+    renderBillingMode();
   }).catch(() => {});
-  const qs = new URLSearchParams(location.search);
   const apiIdParam = qs.get('api_id') || qs.get('buy') || '';
   const keyM = location.hash.match(/unclick_key=([^&]+)/);
   if (keyM) { try { localStorage.setItem('unclick.key', decodeURIComponent(keyM[1])); } catch { /* ignore */ } }
   const m = location.hash.match(/run=([\w-]+)/);
   let last = null;
   try { last = localStorage.getItem('unclick.lastRun'); } catch { /* ignore */ }
-  if (m) attach(m[1]);
+  if (qs.has('replay')) startReplay(qs.get('replay'), qs.get('speed'));
+  else if (m) attach(m[1]);
   else if ((qs.has('paid') || qs.has('canceled')) && last) attach(last);
   if (qs.has('paid')) setTimeout(() => toast('✓ Stripe test payment complete: API key issued', 4500), 600);
   if (qs.has('canceled')) setTimeout(() => toast('Checkout canceled', 3000), 600);

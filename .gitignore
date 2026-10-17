@@ -9,3 +9,7 @@ venv/
 node_modules/
 *.log
 .DS_Store
+
+# Run recordings (app/main.py writes runs/<run_id>.jsonl); only curated demo recordings are committed
+runs/*
+!runs/demo-*.jsonl
