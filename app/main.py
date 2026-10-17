@@ -59,7 +59,25 @@ def sandbox_mode() -> str:
     return "local" if os.getenv("UNCLICK_SANDBOX", "").strip().lower() == "local" else "createos"
 
 
-RUNS_DIR = Path(os.getenv("UNCLICK_RUNS_DIR", str(ROOT / "runs")))
+PUBLIC_DEMO_REPLAY = "demo-real-createos-hn-search"
+
+
+def public_demo() -> bool:
+    """A hosted instance without LLM / CreateOS keys replays a recorded real run instead of failing.
+    UNCLICK_PUBLIC_DEMO=1 forces it, =0 disables it; with keys present nothing changes."""
+    flag = os.getenv("UNCLICK_PUBLIC_DEMO", "").strip()
+    if flag in ("0", "1"):
+        return flag == "1"
+    if fake_mode() or sandbox_mode() == "local":
+        return False
+    has_llm = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    has_sandbox = any(os.getenv(k, "").strip() for k in
+                      ("CREATEOS_PROJECT_API_KEY", "CREATEOS_SANDBOX_API_KEY", "CREATEOS_API_KEY"))
+    return not (has_llm and has_sandbox)
+
+
+BUNDLED_RUNS = ROOT / "runs"  # curated demo recordings shipped with the code
+RUNS_DIR = Path(os.getenv("UNCLICK_RUNS_DIR") or ("/tmp/runs" if os.getenv("VERCEL") else str(BUNDLED_RUNS)))
 _LOCAL_FACTORY = None
 
 
@@ -237,7 +255,7 @@ def _replay_path(name: str) -> Path:
     p = Path(name)
     if p.suffix != ".jsonl":
         p = Path(str(p) + ".jsonl")
-    for c in (RUNS_DIR / p.name, ROOT / p, p):
+    for c in (RUNS_DIR / p.name, BUNDLED_RUNS / p.name, ROOT / p, p):
         if c.is_file():
             return c
     raise HTTPException(404, f"recording {name!r} not found in {RUNS_DIR}")
@@ -310,7 +328,7 @@ class RunIn(BaseModel):
 
 @app.post("/api/runs")
 def start_run(body: RunIn) -> dict[str, Any]:
-    replay = body.replay or os.getenv("UNCLICK_REPLAY", "").strip() or None
+    replay = body.replay or os.getenv("UNCLICK_REPLAY", "").strip() or (PUBLIC_DEMO_REPLAY if public_demo() else None)
     if replay:
         path = _replay_path(replay)
         meta, events = _load_recording(path)
@@ -715,7 +733,8 @@ def config() -> dict[str, Any]:
     return {
         "fake": fake_mode(),
         "sandbox": sandbox_mode(),
-        "replay": os.getenv("UNCLICK_REPLAY", "").strip() or None,
+        "replay": os.getenv("UNCLICK_REPLAY", "").strip() or (PUBLIC_DEMO_REPLAY if public_demo() else None),
+        "public_demo": public_demo(),
         "pipeline": _pipeline_available(),
         "billing": BILLING_MOUNTED,
         "stripe": stripe_enabled(),
