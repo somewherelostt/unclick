@@ -6,7 +6,10 @@
   </a>
   <h1>Unclick any website into an API</h1>
   <p>
-    <b>An AI agent drives Chrome in a <b>CreateOS</b> desktop sandbox, captures the site's hidden JSON API, writes and fixes a Python client until it matches the screen, then ships it as a paid, auto-pausing API.</b>
+    <b>Half the web has no API. Unclick finds the one hiding behind the page, writes the client, and proves it matches the screen.</b>
+  </p>
+  <p>
+    An AI agent drives Chrome in a <b>CreateOS</b> desktop sandbox, captures the site's hidden JSON API, writes and fixes a Python client until it matches the screen, then ships it as a paid, auto-pausing API with a typed schema and an MCP endpoint.
   </p>
   <p>
     Built for the <b>CreateOS x Stripe Projects</b> hackathon, <i>"Build Agents That Run Code"</i> (Oct 17, 2026)
@@ -41,6 +44,7 @@ On the real projects.dev leaderboard, one end-to-end run took **68 seconds**, an
 | Pause/resume + wake-on-request | Verified live (auto-paused after about 61 s, woke in about 6 s) |
 | CreateOS provisioned through Stripe Projects | Verified live |
 | Stripe test-mode billing (Checkout sessions + per-call meter events) | Live |
+| MCP + OpenAPI + health verify | Verified in local mode (real OpenAI agent, Stripe test mode). On CreateOS they ship with the same `server.py`. |
 | Fork into a tighter-policy API sandbox | Used when the plan allows it. On Free it is refused and falls back to a single sandbox. Not verified live. |
 
 ## The "Why" (Our Story)
@@ -68,6 +72,10 @@ You give it a URL and a task, for example `https://projects.dev/leaderboard` and
 - **Writes, runs and fixes a client.** The agent writes a Python client for that endpoint, runs it in a second sandbox, reads the traceback or the diff, and fixes it until its output matches what the browser showed.
 - **Publishes it as a paid API.** The verified client becomes an HTTPS API on the sandbox's public URL. Each call is billed in **Stripe test mode**, and the sandbox **auto-pauses** when idle and wakes on the next request.
 
+### The app
+
+The web UI has a warm editorial look. When a run finishes, a **Live** card shows the API with **curl**, **MCP** and **Schema** tabs. A **Catalog** view lists every published API, with **Verify** and **Self-heal** buttons for each one.
+
 ## One API Call Instead of a Hundred Clicks
 
 A browser agent that reads a site has to open the page, look at it and click through it **every time you need the data**. Each run pays for a browser, a model and a lot of waiting.
@@ -92,7 +100,7 @@ The 68 s and 1.3 s figures come from a real run on the projects.dev leaderboard 
 |---|---|---|---|---|
 | **Speed per call** | ~1.3 s measured (one HTTP call) | Fast to fetch, but you parse HTML yourself | Slow: renders and drives the page every time | Slow: replays UI steps every time |
 | **Cost per call** | A prepaid credit ($5 per 100 calls in test mode), no model tokens | Cheap compute, plus your time maintaining selectors | A browser plus model tokens on every call | A runner or license, plus a browser |
-| **Breaks when the markup changes?** | No, it reads the JSON the page itself calls. It can still break if that API changes, which is what the health check and self-heal are for (new, landing). | Yes, often | Less often, but flaky | Yes, when the UI changes |
+| **Breaks when the markup changes?** | No, it reads the JSON the page itself calls. It can still break if that API changes, which is what the health check and self-heal are for. | Yes, often | Less often, but flaky | Yes, when the UI changes |
 | **Needs an LLM per call?** | No, only once at build time | No | Yes | No |
 | **Setup effort** | A URL and a task | Write and maintain selectors per site | Write a prompt, then pay for it each time | Record and maintain a flow |
 | **Output** | Typed JSON | HTML you have to parse | Free text or whatever the agent returns | Screen data or files |
@@ -106,7 +114,7 @@ Unclick fits any public page that loads its data from a JSON endpoint. Only the 
 - **Real-estate listings.** Pull listings from a search page as structured rows.
 - **Job boards.** Get new postings as JSON instead of copying them by hand.
 - **Travel availability.** Read availability and fares that a booking page loads in the background.
-- **Typed tools for AI agents.** Give an agent a small HTTP API with a known shape, instead of making it drive a browser on every task. Each published API also serves an MCP endpoint and an OpenAPI schema for this (new, landing).
+- **Typed tools for AI agents.** Give an agent a small HTTP API with a known shape, instead of making it drive a browser on every task. Each published API also serves an MCP endpoint and an OpenAPI schema for this.
 
 ## Speed and Cost
 
@@ -213,25 +221,26 @@ Billing lives in [unclick/billing.py](unclick/billing.py) and [unclick/api_templ
 
 ## What Every Published API Gets
 
-Each published API runs in its own sandbox and serves these endpoints. Items marked **(new, landing)** are being merged now, and their final status will be confirmed after testing.
+Each published API runs in its own sandbox and serves these endpoints. The MCP, OpenAPI and health-verify rows were verified in local mode with the real agent and Stripe test mode. On CreateOS they ship with the same `server.py`.
 
 | Endpoint | What it does | Status |
 |---|---|---|
 | `GET /v1/run` | Runs the verified client and returns the JSON. Needs the `X-Unclick-Key` header and uses one credit. | Verified live |
 | `GET /health` | Liveness check. | Verified live |
 | `GET /docs` | Interactive docs for the API. | Verified live |
-| `GET /openapi.json` | A **typed OpenAPI schema**, inferred from the verified output. | (new, landing) |
-| `POST /mcp` | A per-API **MCP server**, so an agent can call this API as a tool. | (new, landing) |
-| `GET /health/verify` | A **health check** that re-verifies the published API. | (new, landing) |
+| `GET /openapi.json` | A **typed OpenAPI 3.1 schema**, inferred from the verified output (for example `{name: string, votes: integer, url: uri}`). | Verified (local mode) |
+| `POST /mcp` | A per-API **MCP server** (Streamable HTTP: `initialize`, `tools/list`, `tools/call`). The tool is named after the API, for example `get_projects_dev_leaderboard`. | Verified (local mode, with the official MCP Inspector CLI) |
+| `GET /health/verify` | A **health check**: re-runs the client and validates the output against the schema (79 rows in about 330 ms in our check). | Verified (local mode) |
 
 The orchestrator adds two endpoints of its own:
 
 | Endpoint | What it does | Status |
 |---|---|---|
-| `POST /api/apis/{id}/heal` | **Self-heal:** re-runs the agent against the site when a published API breaks. | (new, landing) |
-| `GET /api/catalog` | An **API catalog** of published APIs. | (new, landing) |
+| `GET /api/catalog` | The **API catalog** of published APIs. | Verified (local mode) |
+| `POST /api/apis/{id}/verify` | Runs the health check for one published API. | Verified (local mode) |
+| `POST /api/apis/{id}/heal` | **Self-heal:** re-runs the agent pipeline against the site if verify fails. | Verified (local mode) |
 
-### Use a published API as an agent tool (MCP) *(new, landing)*
+### Use as a tool in Claude / Cursor (MCP)
 
 Every published API can act as an MCP server at `POST /mcp`, so an agent can call it as a typed tool instead of driving a browser. Add it to Claude Desktop, Cursor or any MCP client with a config like this:
 
@@ -428,7 +437,7 @@ Not in the HTML sense. Unclick doesn't parse markup. It finds the JSON endpoint 
 We can't give legal advice, so check the terms of any site you point it at. Unclick is built for public data, sends very few requests, and doesn't bypass CAPTCHAs, anti-bot measures or paywalls.
 
 **What happens when the site changes?**
-A health check (`GET /health/verify`) re-verifies the API, and self-heal (`POST /api/apis/{id}/heal` on the orchestrator) re-runs the agent against the site to repair it *(new, landing)*. Running either one automatically on a schedule is on the Roadmap. Because the client reads JSON and not HTML, cosmetic changes to the page don't affect it.
+A health check (`GET /health/verify`) re-runs the client and validates it against the schema, and self-heal (`POST /api/apis/{id}/heal` on the orchestrator) re-runs the agent pipeline if verify fails. Running either one automatically on a schedule is on the Roadmap. Because the client reads JSON and not HTML, cosmetic changes to the page don't affect it.
 
 **Why sandboxes?**
 The agent drives a real browser and runs code it wrote itself. A CreateOS sandbox keeps that contained, with an egress allowlist so it can only reach the sites it needs. The published API also runs in one, which is what lets it pause when idle and wake on request.
