@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "unclick-web",
+      "runtimeExecutable": "C:/Users/abuma/miniconda3/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--port", "8080"],
+      "env": { "UNCLICK_FAKE": "1", "UNCLICK_FAKE_SPEED": "1" },
+      "port": 8080
+    }
+  ]
+}

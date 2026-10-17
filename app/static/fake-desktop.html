@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fake desktop</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; font-family: 'Segoe UI', Inter, system-ui, sans-serif; }
+  body { background: radial-gradient(circle at 30% 20%, #2b1f4a, #120d22 60%, #0a0815); }
+  .bar { position: absolute; top: 0; left: 0; right: 0; height: 26px; background: rgba(0,0,0,.6); color: #ddd; font-size: 12px; display: flex; align-items: center; padding: 0 12px; gap: 14px; }
+  .win { position: absolute; left: 4%; top: 7%; width: 92%; height: 88%; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,.6); display: flex; flex-direction: column; }
+  .chrome { background: #202124; height: 74px; flex-shrink: 0; position: relative; }
+  .tabx { position: absolute; left: 12px; top: 8px; background: #35363a; color: #e8eaed; font-size: 12px; padding: 7px 14px; border-radius: 8px 8px 0 0; width: 220px; }
+  .omni { position: absolute; left: 90px; right: 20px; top: 40px; height: 26px; border-radius: 13px; background: #35363a; color: #e8eaed; font-size: 13px; display: flex; align-items: center; padding-left: 16px; }
+  .dots { position: absolute; left: 14px; top: 46px; display: flex; gap: 8px; }
+  .dots i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .page { flex: 1; overflow: hidden; background: #fafaf9; position: relative; }
+  .inner { padding: 26px 60px; transition: transform 1.2s cubic-bezier(.2,.8,.2,1); }
+  h1 { margin: 0; font-size: 28px; color: #111; }
+  .sub { color: #666; margin: 6px 0 20px; font-size: 15px; }
+  .row { display: flex; align-items: center; gap: 18px; background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; padding: 12px 18px; margin-bottom: 10px; font-size: 16px; transition: background .3s; }
+  .row.hl { background: #eef2ff; border-color: #c7d2fe; }
+  .rk { color: #999; width: 34px; }
+  .nm { flex: 1; color: #111; font-weight: 600; }
+  .vt { background: #111; color: #fff; border-radius: 8px; padding: 5px 12px; font-weight: 600; font-size: 14px; }
+  .cursor { position: absolute; width: 22px; height: 22px; z-index: 10; transition: left 1.1s cubic-bezier(.4,0,.2,1), top 1.1s cubic-bezier(.4,0,.2,1); pointer-events: none; }
+  .ripple { position: absolute; width: 30px; height: 30px; border-radius: 50%; border: 3px solid #6366f1; transform: translate(-50%, -50%); animation: rip .6s ease-out forwards; z-index: 9; }
+  @keyframes rip { from { opacity: 1; width: 6px; height: 6px; } to { opacity: 0; width: 50px; height: 50px; } }
+</style>
+</head>
+<body>
+  <div class="bar"><b>Activities</b><span>Google Chrome</span><span style="flex:1"></span><span>desktop:1 · CreateOS</span></div>
+  <div class="win">
+    <div class="chrome">
+      <div class="tabx">Leaderboard · projects.dev</div>
+      <div class="dots"><i style="background:#ed6a5e"></i><i style="background:#f5bf4f"></i><i style="background:#61c554"></i></div>
+      <div class="omni">🔒 projects.dev/leaderboard</div>
+    </div>
+    <div class="page">
+      <div class="inner" id="inner">
+        <h1>Leaderboard</h1>
+        <div class="sub">Top projects from the CreateOS x Stripe hackathon</div>
+        <div id="rows"></div>
+      </div>
+    </div>
+  </div>
+  <svg class="cursor" id="cur" viewBox="0 0 22 22" style="left:40%;top:40%"><path d="M2 1v18l5-5h8z" fill="#000" stroke="#fff" stroke-width="1.5"/></svg>
+<script>
+  const P = [['Unclick',412],['Ledgerline',377],['PaperTrail AI',341],['Sandcastle',318],['MeterMaid',296],['Forklift',271],['Invoicely Agent',255],['Quiet Hours',231],['Tabula',214],['Pocket SRE',198],['Driftwood',187],['Lattice',176]];
+  document.getElementById('rows').innerHTML = P.map(([n, v], i) => `<div class="row" data-i="${i}"><span class="rk">#${i + 1}</span><span class="nm">${n}</span><span class="vt">▲ ${v}</span></div>`).join('');
+  const cur = document.getElementById('cur');
+  const inner = document.getElementById('inner');
+  let step = 0;
+  setInterval(() => {
+    step++;
+    const x = 20 + Math.random() * 60, y = 25 + Math.random() * 60;
+    cur.style.left = x + '%'; cur.style.top = y + '%';
+    if (step % 3 === 0) {
+      setTimeout(() => {
+        const r = document.createElement('div');
+        r.className = 'ripple'; r.style.left = (x + 0.5) + '%'; r.style.top = (y + 0.8) + '%';
+        document.body.appendChild(r); setTimeout(() => r.remove(), 700);
+        document.querySelectorAll('.row').forEach((el) => el.classList.remove('hl'));
+        const row = document.querySelector(`.row[data-i="${step % 6}"]`); row && row.classList.add('hl');
+      }, 1150);
+    }
+    if (step % 4 === 0) inner.style.transform = `translateY(-${(step % 8) * 30}px)`;
+  }, 1700);
+</script>
+</body>
+</html>
