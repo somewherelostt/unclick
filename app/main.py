@@ -120,6 +120,7 @@ class Run:
         self.api_key: str | None = None
         self.api_sandbox_id: str | None = None
         self.api_status: str | None = None
+        self.heal_of: str | None = None  # api_id this run is re-generating (self-heal)
         self._lock = threading.Lock()
 
     def append(self, ev: dict[str, Any]) -> None:
@@ -139,6 +140,8 @@ class Run:
                 self.api_url = data.get("api_url") or self.api_url
                 self.curl = data.get("curl") or self.curl
                 self.api_sandbox_id = data.get("sandbox_id") or self.api_sandbox_id
+                if self.mode not in ("replay", "fake"):
+                    _catalog_add(self, data)
             elif kind == "billing" and data.get("api_key"):
                 self.api_key = data["api_key"]
             elif kind == "done":
@@ -161,6 +164,7 @@ class Run:
             "error": self.error,
             "api_url": self.api_url,
             "curl": self.curl,
+            "heal_of": self.heal_of,
             "created": self.created,
             "event_count": len(self.events),
             "counts": counts,
@@ -559,6 +563,151 @@ async def api_status(run_id: str) -> dict[str, Any]:
             sink.emit("sandbox", "API sandbox idle: auto-pausing", id=sb.id, role="api", action="pausing")
         run.api_status = st
     return {"status": st}
+
+
+# ---------------------------------------------------------------------------
+# Catalog of published APIs + health verify + self-heal
+# ---------------------------------------------------------------------------
+
+CATALOG_PATH = RUNS_DIR / "catalog.json"
+CATALOG_LOCK = threading.Lock()
+
+
+def _load_catalog() -> dict[str, dict[str, Any]]:
+    try:
+        rows = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+        return {r["api_id"]: r for r in rows if isinstance(r, dict) and r.get("api_id")}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+CATALOG: dict[str, dict[str, Any]] = _load_catalog()
+
+
+def _save_catalog() -> None:
+    try:
+        RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = CATALOG_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(list(CATALOG.values()), indent=1), encoding="utf-8")
+        tmp.replace(CATALOG_PATH)
+    except OSError as e:
+        log.warning("cannot save catalog: %s", e)
+
+
+def _api_base(api_url: str) -> str:
+    return api_url[: -len("/v1/run")] if api_url.endswith("/v1/run") else api_url.rstrip("/")
+
+
+def _catalog_add(run: Run, data: dict[str, Any]) -> None:
+    """Called (under run._lock) for every live publish event. No keys are stored in the catalog."""
+    api_url = data.get("api_url")
+    api_id = data.get("api_id") or data.get("sandbox_id")
+    if not api_url or not api_id:
+        return
+    base = _api_base(api_url)
+    entry = {
+        "api_id": api_id,
+        "name": data.get("name") or api_id,
+        "source_url": data.get("source_url") or run.url,
+        "task": data.get("task") or run.task,
+        "api_url": api_url,
+        "docs_url": data.get("docs_url") or base + "/docs",
+        "openapi_url": data.get("openapi_url") or base + "/openapi.json",
+        "mcp_url": data.get("mcp_url") or base + "/mcp",
+        "tool_name": data.get("tool_name"),
+        "fields": data.get("fields") or [],
+        "run_id": run.id,
+        "mode": run.mode,
+        "created_at": time.time(),
+        "last_verified": None,
+        "healthy": None,
+        "problems": [],
+        "heal_of": run.heal_of,
+        "replaced_by": None,
+    }
+    with CATALOG_LOCK:
+        CATALOG[api_id] = entry
+        if run.heal_of and run.heal_of in CATALOG:
+            CATALOG[run.heal_of]["replaced_by"] = api_id
+        _save_catalog()
+
+
+def _catalog_entry(api_id: str) -> dict[str, Any]:
+    entry = CATALOG.get(api_id)
+    if not entry:
+        raise HTTPException(404, f"api {api_id!r} not in catalog")
+    return entry
+
+
+@app.get("/api/catalog")
+def catalog() -> list[dict[str, Any]]:
+    """Published APIs, newest first."""
+    return sorted(CATALOG.values(), key=lambda e: -(e.get("created_at") or 0))
+
+
+async def _verify(entry: dict[str, Any]) -> dict[str, Any]:
+    """GET {base}/health/verify on the live API (wakes a paused sandbox) and record the result."""
+    import httpx
+
+    url = _api_base(entry["api_url"]) + "/health/verify"
+    try:
+        async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
+            r = await client.get(url)
+        if r.status_code == 404:
+            body = {"ok": False, "problems": ["API was published before /health/verify existed"]}
+        else:
+            body = r.json()
+            if not isinstance(body, dict) or "ok" not in body:
+                body = {"ok": False, "problems": [f"unexpected /health/verify response ({r.status_code})"]}
+    except Exception as e:  # noqa: BLE001
+        body = {"ok": False, "problems": [f"API unreachable: {type(e).__name__}: {str(e)[:200]}"]}
+    body.setdefault("checked_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    body.setdefault("problems", [])
+    with CATALOG_LOCK:
+        entry["healthy"] = bool(body["ok"])
+        entry["last_verified"] = time.time()
+        entry["problems"] = list(body["problems"])[:20]
+        _save_catalog()
+    run = RUNS.get(entry.get("run_id") or "")
+    if run:
+        RunSink(run).emit("health", ("Health check passed: output still matches the schema" if body["ok"]
+                                     else f"Health check failed: {'; '.join(body['problems'][:3])}"),
+                          api_id=entry["api_id"], ok=bool(body["ok"]), checked_at=body["checked_at"],
+                          problems=entry["problems"], healthy=entry["healthy"], last_verified=entry["last_verified"])
+    return body
+
+
+@app.post("/api/apis/{api_id}/verify")
+async def verify_api(api_id: str) -> dict[str, Any]:
+    entry = _catalog_entry(api_id)
+    body = await _verify(entry)
+    return {"api_id": api_id, "ok": bool(body["ok"]), "checked_at": body["checked_at"],
+            "problems": body["problems"], "healthy": entry["healthy"], "last_verified": entry["last_verified"],
+            "verify": body}
+
+
+@app.post("/api/apis/{api_id}/heal")
+async def heal_api(api_id: str, force: bool = False) -> dict[str, Any]:
+    """Verify; if broken (or force=true), re-run the whole pipeline for the same url + task on a new run_id.
+
+    The new run publishes a fresh API; its catalog entry has heal_of=<this api_id> and this entry gets
+    replaced_by=<new api_id>.
+    """
+    entry = _catalog_entry(api_id)
+    body = await _verify(entry)
+    if body["ok"] and not force:
+        return {"ok": True, "healed": False, "api_id": api_id, "verify": body}
+    fn, is_fake = _pick_pipeline(fake_mode())
+    run = Run(entry["source_url"], entry["task"], is_fake)
+    run.heal_of = api_id
+    RUNS[run.id] = run
+    reason = "forced" if body["ok"] else "; ".join(body["problems"][:3]) or "verification failed"
+    RunSink(run).emit("log", f"Self-heal of {entry['name']} ({api_id}): {reason}. Re-running the agent on "
+                             f"{entry['source_url']} to regenerate and re-verify the client.", level="warn",
+                      heal_of=api_id, problems=body["problems"])
+    threading.Thread(target=_run_thread, args=(run, fn), daemon=True, name=f"heal-{run.id}").start()
+    return {"ok": bool(body["ok"]), "healed": True, "run_id": run.id, "mode": run.mode, "api_id": api_id,
+            "verify": body}
 
 
 @app.get("/api/config")
