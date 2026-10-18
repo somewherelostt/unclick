@@ -445,12 +445,12 @@ Yes. `pip install -r requirements.txt`, copy `.env.example` to `.env`, and run `
 
 ## The Team
 
-| Name | Role | GitHub |
-|---|---|---|
-| **Maaz** | _TBD_ | [somewherelostt](https://github.com/somewherelostt) |
-| **Ananya** | _TBD_ | [isthatananya](https://github.com/isthatananya) |
+**Team name: Cold Coffee**
 
-Team name: _TBD_
+| Name | GitHub |
+|---|---|
+| **Maaz** | [somewherelostt](https://github.com/somewherelostt) |
+| **Ananya** | [isthatananya](https://github.com/isthatananya) |
 
 ## License
 
@@ -459,5 +459,5 @@ Released under the MIT License.
 ---
 
 <div align="center">
-  Made by <b>Maaz</b> & <b>Ananya</b> for the CreateOS x Stripe Projects hackathon
+  Made by <b>Cold Coffee</b> (<b>Maaz</b> & <b>Ananya</b>) for the CreateOS x Stripe Projects hackathon
 </div>
