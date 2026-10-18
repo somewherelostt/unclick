@@ -731,6 +731,15 @@
     const out = {};
     const m = /'(https?:\/\/[^']+)'/.exec(S.publish.curl || '') || [null, S.publish.api_url];
     try { new URL(m[1]).searchParams.forEach((v, k) => { out[k] = v; }); } catch { /* ignore */ }
+    if (!Object.keys(out).length && S.mode === 'replay') {
+      // A replay's API is gone, so no OpenAPI doc: read the params from the recorded client.run() signature.
+      const code = (S.codes[S.codes.length - 1] || {}).code || '';
+      const sig = /def run\(([\s\S]*?)\)\s*(->[^:]*)?:/.exec(code);
+      if (sig) sig[1].split(',').forEach((a) => {
+        const p = /^\s*(\w+)\s*(?::\s*[\w\[\], |]+)?\s*=\s*(.+?)\s*$/.exec(a);
+        if (p && p[1] !== 'page') out[p[1]] = p[2].replace(/^["']|["']$/g, '').replace(/^None$/, '');
+      });
+    }
     if (!Object.keys(out).length) out.limit = '10';
     return out;
   }

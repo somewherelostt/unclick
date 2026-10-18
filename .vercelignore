@@ -1,0 +1,12 @@
+runs/*
+!runs/demo-*.jsonl
+docs
+scripts
+.projects
+.claude
+.createos.json
+.env
+.env.*
+!.env.example
+.git
+.vercel
