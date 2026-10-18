@@ -439,6 +439,9 @@ async def try_api(body: TryIn) -> JSONResponse:
         raise HTTPException(400, "no api_url")
     sink = RunSink(run) if run else None
     if run and run.mode == "replay" and run.recorded_mode != "fake":
+        local = await _try_replay_locally(run, api_url, sink)
+        if local is not None:
+            return local
         return JSONResponse({"status": 409, "ms": 0, "json": {
             "error": f"This is a replay of {run.replay_of}; the API it published is not running now. "
                      "Start a new run to get a live API."}}, status_code=409)
@@ -490,6 +493,44 @@ async def try_api(body: TryIn) -> JSONResponse:
     elif sink and r.status_code == 402:
         sink.emit("billing", "Out of calls: 402 Payment Required", event="call_charged", calls_remaining=0)
     return JSONResponse({"status": r.status_code, "ms": round(ms, 1), "json": payload, "key_rejected": key_rejected})
+
+
+async def _try_replay_locally(run: Run, api_url: str, sink: RunSink | None) -> JSONResponse | None:
+    """A replay's published sandbox is gone, so run the recorded, verified client.py here for real."""
+    code = next((e.get("data", {}).get("code") for e in reversed(run.events) if e.get("kind") == "code"), None)
+    if not code:
+        return None
+    import subprocess
+    import sys
+    import tempfile
+    import urllib.parse
+
+    params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(api_url).query))
+    runner = ("import json,sys,inspect,client\n"
+              "p=json.loads(sys.argv[1]);sig=inspect.signature(client.run)\n"
+              "for k,v in list(p.items()):\n"
+              "  a=sig.parameters.get(k)\n"
+              "  if a is None: p.pop(k); continue\n"
+              "  t=a.annotation if a.annotation is not inspect._empty else type(a.default)\n"
+              "  try: p[k]=t(v) if t in (int,float) else v\n"
+              "  except Exception: pass\n"
+              "print(json.dumps(client.run(**p)))\n")
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "client.py").write_text(code, encoding="utf-8")
+        Path(d, "runner.py").write_text(runner, encoding="utf-8")
+        t0 = time.time()
+        proc = await asyncio.to_thread(subprocess.run, [sys.executable, "runner.py", json.dumps(params)],
+                                       cwd=d, capture_output=True, timeout=60)
+        out, err = proc.stdout, proc.stderr
+        ms = (time.time() - t0) * 1000
+    if proc.returncode != 0:
+        return JSONResponse({"status": 500, "ms": round(ms, 1), "error": err.decode(errors="replace")[-400:]}, status_code=502)
+    left = next((e["data"]["calls_remaining"] for e in reversed(run.events)
+                 if e.get("kind") == "billing" and isinstance(e.get("data", {}).get("calls_remaining"), int)), 100)
+    if sink:
+        sink.emit("billing", "Replay: recorded client.py ran locally (not metered)", event="call_charged",
+                  calls_remaining=max(0, left - 1), metered=False)
+    return JSONResponse({"status": 200, "ms": round(ms, 1), "json": json.loads(out.decode() or "null")})
 
 
 def _cents_per_call() -> float | None:
