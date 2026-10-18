@@ -24,6 +24,7 @@
   </p>
   <p>
     <a href="LINK_TO_YOUR_YOUTUBE_VIDEO_OR_LOOM">Demo Video</a> ·
+    <a href="https://x.com/Maaztwts/status/2111607519365997033">Launch Post on X</a> ·
     <a href="https://github.com/somewherelostt/unclick/issues">Report Bug</a> ·
     <a href="https://github.com/somewherelostt/unclick/issues">Request Feature</a>
   </p>
@@ -390,6 +391,7 @@ unclick/
 
 ## Hackathon Context
 
+- **Launch post**: [our post on X](https://x.com/Maaztwts/status/2111607519365997033).
 - **Event**: CreateOS x Stripe Projects, **"Build Agents That Run Code"**.
 - **Challenge**: Build an agent that writes code, runs it in a sandbox, reads the errors and fixes itself.
 - **Tools Used**:
@@ -446,7 +448,7 @@ Yes. `pip install -r requirements.txt`, copy `.env.example` to `.env`, and run `
 | Name | Role | GitHub |
 |---|---|---|
 | **Maaz** | _TBD_ | [somewherelostt](https://github.com/somewherelostt) |
-| **Ananya** | _TBD_ | _TBD_ |
+| **Ananya** | _TBD_ | [isthatananya](https://github.com/isthatananya) |
 
 Team name: _TBD_
 
