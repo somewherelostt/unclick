@@ -1,7 +1,7 @@
 # Unclick
 
 <div align="center">
-  <a href="LINK_TO_YOUR_YOUTUBE_VIDEO_OR_LOOM">
+  <a href="https://x.com/Maaztwts/status/2111607519365997033">
     <img src="docs/screenshot.png" alt="Watch the Unclick demo" />
   </a>
   <h1>Unclick any website into an API</h1>
@@ -23,8 +23,7 @@
     <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License: MIT" />
   </p>
   <p>
-    <a href="LINK_TO_YOUR_YOUTUBE_VIDEO_OR_LOOM">Demo Video</a> ·
-    <a href="https://x.com/Maaztwts/status/2111607519365997033">Launch Post on X</a> ·
+    <a href="https://x.com/Maaztwts/status/2111607519365997033">Demo Video on X</a> ·
     <a href="https://github.com/somewherelostt/unclick/issues">Report Bug</a> ·
     <a href="https://github.com/somewherelostt/unclick/issues">Request Feature</a>
   </p>
@@ -391,7 +390,7 @@ unclick/
 
 ## Hackathon Context
 
-- **Launch post**: [our post on X](https://x.com/Maaztwts/status/2111607519365997033).
+- **Launch post and demo video**: [our post on X](https://x.com/Maaztwts/status/2111607519365997033).
 - **Event**: CreateOS x Stripe Projects, **"Build Agents That Run Code"**.
 - **Challenge**: Build an agent that writes code, runs it in a sandbox, reads the errors and fixes itself.
 - **Tools Used**:
