@@ -23,9 +23,11 @@
     <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License: MIT" />
     <a href="https://x.com/stripe/status/2112380808887755010"><img src="https://img.shields.io/badge/%F0%9F%99%8C%20Noticed%20by-@stripe-635BFF?style=flat-square&logo=x&logoColor=white" alt="Noticed by @stripe on X" /></a>
   </p>
-  <p>
-    🙌 <b><a href="https://x.com/stripe/status/2112380808887755010">Stripe reacted to our launch on X</a></b>
-  </p>
+  <h3>🙌 Noticed by Stripe</h3>
+  <a href="https://x.com/stripe/status/2112380808887755010">
+    <img src="docs/stripe-shoutout.png" alt="Stripe reacting to the Unclick launch post on X" width="560" />
+  </a>
+  <p><sub>Stripe reacted to our <a href="https://x.com/Maaztwts/status/2111607519365997033">launch post</a> · <a href="https://x.com/stripe/status/2112380808887755010">view on X</a></sub></p>
   <p>
     <a href="https://x.com/Maaztwts/status/2111607519365997033">Demo Video on X</a> ·
     <a href="https://x.com/stripe/status/2112380808887755010">@stripe on X</a> ·
