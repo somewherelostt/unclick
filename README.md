@@ -21,9 +21,14 @@
     <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12" />
     <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
     <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License: MIT" />
+    <a href="https://x.com/stripe/status/2112380808887755010"><img src="https://img.shields.io/badge/%F0%9F%99%8C%20Noticed%20by-@stripe-635BFF?style=flat-square&logo=x&logoColor=white" alt="Noticed by @stripe on X" /></a>
+  </p>
+  <p>
+    🙌 <b><a href="https://x.com/stripe/status/2112380808887755010">Stripe reacted to our launch on X</a></b>
   </p>
   <p>
     <a href="https://x.com/Maaztwts/status/2111607519365997033">Demo Video on X</a> ·
+    <a href="https://x.com/stripe/status/2112380808887755010">@stripe on X</a> ·
     <a href="https://github.com/somewherelostt/unclick/issues">Report Bug</a> ·
     <a href="https://github.com/somewherelostt/unclick/issues">Request Feature</a>
   </p>
